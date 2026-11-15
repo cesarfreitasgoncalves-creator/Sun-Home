@@ -261,8 +261,10 @@ vazio precisa de anotacao de tipo:
 let notas: dict[string, number] = {}
 notas["Ada"] = 10
 notas["Lin"] = 9.5
+print(notas.contains("Ada"))
 print(notas["Ada"])
 print(len(notas))
+let removida: bool = notas.remove("Lin")
 
 for nome in notas:
     print(nome)
@@ -273,6 +275,9 @@ Literais tambem podem ser escritos como `{"Ada": 10, "Lin": 9.5}`. A leitura
 de uma chave inexistente gera erro de runtime; a atribuicao insere ou atualiza
 a chave. A iteracao visita as chaves em ordem crescente. Dicionarios aninhados,
 valores compostos e chaves `number` nao sao suportados.
+`dicionario.contains(chave)` devolve `bool`. `dicionario.remove(chave)` remove
+a entrada e devolve `true` se ela existia ou `false` se nao existia; tambem pode
+ser chamada como instrucao quando o resultado nao e necessario.
 
 Loops usam condicoes booleanas, iteracao por lista e iteracao numerica por
 intervalo:
@@ -451,7 +456,10 @@ sao suportadas.
 
 Enums podem declarar variantes com campos escalares, e `match` seleciona um
 bloco por valor ou variante. Os campos de uma variante podem ser ligados a nomes
-no padrao; `_` ignora um campo. `else` e opcional e nao ha fallthrough:
+no padrao; `_` ignora um campo. Casos repetidos sao rejeitados. Sem `else`,
+um `match` de enum precisa cobrir todas as variantes e um `match` de `bool`
+precisa cobrir `true` e `false`; para outros valores escalares, `else` e
+opcional. Nao ha fallthrough:
 
 ```sun
 enum Result

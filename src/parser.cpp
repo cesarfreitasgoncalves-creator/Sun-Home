@@ -2,6 +2,7 @@
 #include "lexer.hpp"
 
 #include <algorithm>
+#include <iomanip>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -880,6 +881,41 @@ private:
                 continue;
             }
             if (!accept(".")) break;
+            if (is_dictionary_type(value.type)) {
+                if (peek().kind != Token::Kind::identifier) {
+                    throw ParseError(line_, "expected a dictionary operation after '.'");
+                }
+                const auto operation = take().text;
+                if (operation != "contains" && operation != "remove") {
+                    throw ParseError(line_, "unknown dictionary operation '" + operation + "'");
+                }
+                if (!accept("(")) {
+                    throw ParseError(line_, "dictionary operations require parentheses");
+                }
+                if (!allow_function_calls_) {
+                    throw ParseError(line_, "default values cannot call functions");
+                }
+                const auto arguments = parse_expression_arguments();
+                if (arguments.size() != 1) {
+                    throw ParseError(line_, "dictionary." + operation +
+                                                " expects one key argument");
+                }
+                const auto key_type = dictionary_types(value.type).first;
+                if (arguments.front().type != key_type) {
+                    throw ParseError(line_, "dictionary key must have type " +
+                                                cpp_type(key_type));
+                }
+                const auto helper = operation == "contains"
+                                        ? "sun_dict_contains"
+                                        : "sun_dict_remove";
+                const auto code = helper + "(" + value.cpp + ", " +
+                                  arguments.front().cpp + ")";
+                value = make_expr_value(
+                    Type::boolean, code,
+                    make_expression(Expression::Kind::call, Type::boolean, helper,
+                                    {value.ast, arguments.front().ast}));
+                continue;
+            }
             if (value.type.kind != Type::Kind::custom) {
                 throw ParseError(line_, "member access requires a class or struct value");
             }
@@ -2210,6 +2246,8 @@ private:
         bool has_case = false;
         bool has_else = false;
         bool all_cases_return = true;
+        std::set<std::string> seen_patterns;
+        std::set<std::string> covered_enum_variants;
         std::size_t case_index = 0;
         while (index < lines_.size()) {
             skip_ignored(index);
@@ -2271,6 +2309,11 @@ private:
                         });
                     if (payload_enum) {
                         enum_variant_pattern = true;
+                        if (!covered_enum_variants.emplace(variant_name).second) {
+                            throw ParseError(case_line.number,
+                                             "duplicate match case for enum variant '" +
+                                                 variant_name + "'");
+                        }
                         std::vector<std::string> bindings;
                         if (open != std::string::npos) {
                             if (pattern_text.back() != ')') {
@@ -2349,6 +2392,33 @@ private:
                     throw ParseError(case_line.number,
                                      "case patterns must be literals or enum values");
                 }
+                std::string pattern_key;
+                if (value.type.kind == Type::Kind::custom) {
+                    const auto separator = pattern.ast.value.rfind("::");
+                    if (separator == std::string::npos) {
+                        throw ParseError(case_line.number, "invalid enum match pattern");
+                    }
+                    const auto variant_name = pattern.ast.value.substr(separator + 2);
+                    if (!covered_enum_variants.emplace(variant_name).second) {
+                        throw ParseError(case_line.number,
+                                         "duplicate match case for enum variant '" +
+                                             variant_name + "'");
+                    }
+                } else if (pattern.type == Type::string) {
+                    pattern_key = "string:" + pattern.ast.value;
+                } else if (pattern.type == Type::character) {
+                    pattern_key = "char:" + pattern.ast.children.front().value;
+                } else if (pattern.type == Type::number) {
+                    std::ostringstream canonical;
+                    canonical << "number:" << std::hexfloat
+                              << std::stod(pattern.ast.value);
+                    pattern_key = canonical.str();
+                } else {
+                    pattern_key = cpp_type(pattern.type) + ":" + pattern.cpp;
+                }
+                if (!pattern_key.empty() && !seen_patterns.emplace(pattern_key).second) {
+                    throw ParseError(case_line.number, "duplicate match case pattern");
+                }
                 match_case.pattern = pattern.ast;
             }
             ++index;
@@ -2363,14 +2433,35 @@ private:
         if (!has_case) {
             throw ParseError(line.number, "match must contain at least one case");
         }
+        bool exhaustive = has_else;
+        if (!has_else && enum_type != custom_types_.end() &&
+            enum_type->second.is_enum) {
+            for (const auto& variant : enum_type->second.enum_variants) {
+                if (covered_enum_variants.find(variant.name) ==
+                    covered_enum_variants.end()) {
+                    throw ParseError(line.number,
+                                     "match is missing enum variant '" + variant.name +
+                                         "'; add a case or 'else:'");
+                }
+            }
+            exhaustive = true;
+        }
+        if (!has_else && value.type == Type::boolean) {
+            const bool covers_true = seen_patterns.find("bool:true") != seen_patterns.end();
+            const bool covers_false = seen_patterns.find("bool:false") != seen_patterns.end();
+            if (!covers_true || !covers_false) {
+                throw ParseError(
+                    line.number,
+                    "match on bool must cover 'true' and 'false' or include 'else:'");
+            }
+            exhaustive = true;
+        }
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "match block is missing 'end'");
         }
         ++index;
-        if (definitely_returns) {
-            *definitely_returns = has_else && all_cases_return;
-        }
+        if (definitely_returns) *definitely_returns = exhaustive && all_cases_return;
         return Statement{std::move(statement), line.number};
     }
 
@@ -2844,10 +2935,29 @@ private:
         }
         const auto object = expression(trim(text.substr(0, dot)), line.number,
                                        symbols, math_imported);
+        const auto method = trim(text.substr(dot + 1, open - dot - 1));
+        if (is_dictionary_type(object.type)) {
+            if (method != "remove") {
+                throw ParseError(line.number, "dictionary." + method +
+                                                 " returns bool; use it in an expression");
+            }
+            const auto call = parse_call(method + text.substr(open), line.number);
+            const auto arguments = split_arguments(call.second, line.number);
+            if (arguments.size() != 1) {
+                throw ParseError(line.number, "dictionary.remove expects one key argument");
+            }
+            const auto key = expression(arguments.front(), line.number, symbols,
+                                         math_imported);
+            const auto key_type = dictionary_types(object.type).first;
+            if (key.type != key_type) {
+                throw ParseError(line.number, "dictionary key must have type " +
+                                                 cpp_type(key_type));
+            }
+            return "sun_dict_remove(" + object.cpp + ", " + key.cpp + ");";
+        }
         if (object.type.kind != Type::Kind::custom) {
             throw ParseError(line.number, "method call requires a class or struct value");
         }
-        const auto method = trim(text.substr(dot + 1, open - dot - 1));
         if (!is_identifier(method)) {
             throw ParseError(line.number, "invalid method name");
         }
@@ -3032,7 +3142,8 @@ private:
         const auto method_object = method_dot == std::string::npos
             ? symbols.end() : symbols.find(trim(text.substr(0, method_dot)));
         if (method_object != symbols.end() &&
-            method_object->second.type.kind == Type::Kind::custom &&
+            (method_object->second.type.kind == Type::Kind::custom ||
+             is_dictionary_type(method_object->second.type)) &&
             text.find('(', method_dot) != std::string::npos) {
             auto result = parse_method_statement(line, text, symbols, math_imported);
             ++index;

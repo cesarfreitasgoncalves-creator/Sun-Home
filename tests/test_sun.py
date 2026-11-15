@@ -102,6 +102,7 @@ class SunCompilerTests(unittest.TestCase):
             'scores["Bo"] = 20\n'
             'scores["Ada"] = 15\n'
             'print(scores["Ada"])\n'
+            'print(scores.contains("Ada"))\n'
             "print(len(scores))\n"
             "print(scores)\n"
             "for key in scores:\n"
@@ -111,7 +112,12 @@ class SunCompilerTests(unittest.TestCase):
             '    print(scores["missing"])\n'
             "catch error:\n"
             '    print(error)\n'
-            "end\n",
+            "end\n"
+            'let removed: bool = scores.remove("Bo")\n'
+            "print(removed)\n"
+            'print(scores.contains("Bo"))\n'
+            'scores.remove("missing")\n'
+            "print(len(scores))\n",
             "--compile",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -125,7 +131,8 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(
             executable.stdout,
-            "15\n2\n{Ada: 15, Bo: 20}\nAda\nBo\ndictionary key not found\n",
+            "15\ntrue\n2\n{Ada: 15, Bo: 20}\nAda\nBo\n"
+            "dictionary key not found\ntrue\nfalse\n1\n",
         )
 
     def test_transpiles_and_compiles_function_calls_and_strings(self):
@@ -981,6 +988,52 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "Ok\n43\ntwo\ninteger\n")
+
+    def test_match_rejects_duplicate_and_uncovered_cases(self):
+        incomplete_enum = self.invoke(
+            "incomplete-enum-match.su",
+            "enum State\n"
+            "    Ready\n"
+            "    Busy\n"
+            "end\n"
+            "let state: State = State.Ready\n"
+            "match state:\n"
+            "    case State.Ready:\n"
+            '        print("ready")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(incomplete_enum.returncode, 0)
+        self.assertIn("match is missing enum variant 'Busy'", incomplete_enum.stderr)
+
+        duplicate_case = self.invoke(
+            "duplicate-match-case.su",
+            "let active: bool = true\n"
+            "match active:\n"
+            "    case true:\n"
+            '        print("yes")\n'
+            "    case true:\n"
+            '        print("also yes")\n'
+            "    else:\n"
+            '        print("no")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(duplicate_case.returncode, 0)
+        self.assertIn("duplicate match case pattern", duplicate_case.stderr)
+
+        incomplete_bool = self.invoke(
+            "incomplete-bool-match.su",
+            "let active: bool = true\n"
+            "match active:\n"
+            "    case true:\n"
+            '        print("yes")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(incomplete_bool.returncode, 0)
+        self.assertIn("match on bool must cover 'true' and 'false'",
+                      incomplete_bool.stderr)
 
     def test_nested_functions_capture_variables_by_reference(self):
         result = self.invoke(

@@ -274,6 +274,16 @@ decltype(auto) sun_dict_at(Map& values, const Key& key) {
     return (found->second);
 }
 
+template <typename Map, typename Key>
+bool sun_dict_contains(const Map& values, const Key& key) {
+    return values.find(key) != values.end();
+}
+
+template <typename Map, typename Key>
+bool sun_dict_remove(Map& values, const Key& key) {
+    return values.erase(key) != 0;
+}
+
 std::string sun_input_string(const std::string& prompt) {
     std::cout << prompt << std::flush;
     std::string value;

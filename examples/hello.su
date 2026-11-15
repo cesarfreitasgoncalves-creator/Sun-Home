@@ -1,0 +1,5 @@
+greet("Sun")
+
+func greet(name)
+    print("Hello, " + name + "!")
+end

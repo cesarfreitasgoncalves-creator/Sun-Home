@@ -905,9 +905,9 @@ private:
                     throw ParseError(line_, "dictionary key must have type " +
                                                 cpp_type(key_type));
                 }
-                const auto helper = operation == "contains"
-                                        ? "sun_dict_contains"
-                                        : "sun_dict_remove";
+                const std::string helper = operation == "contains"
+                                               ? "sun_dict_contains"
+                                               : "sun_dict_remove";
                 const auto code = helper + "(" + value.cpp + ", " +
                                   arguments.front().cpp + ")";
                 value = make_expr_value(

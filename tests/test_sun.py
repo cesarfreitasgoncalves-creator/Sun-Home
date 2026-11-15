@@ -1035,6 +1035,44 @@ class SunCompilerTests(unittest.TestCase):
         self.assertIn("match on bool must cover 'true' and 'false'",
                       incomplete_bool.stderr)
 
+    def test_match_accepts_exhaustive_enum_and_bool_without_else(self):
+        result = self.invoke(
+            "exhaustive-match.su",
+            "enum State\n"
+            "    Ready\n"
+            "    Busy\n"
+            "end\n"
+            "func state_name(state: State): string\n"
+            "    match state:\n"
+            "        case State.Ready:\n"
+            '            return "ready"\n'
+            "        case State.Busy:\n"
+            '            return "busy"\n'
+            "    end\n"
+            "end\n"
+            "func bool_name(value: bool): string\n"
+            "    match value:\n"
+            "        case true:\n"
+            '            return "true"\n'
+            "        case false:\n"
+            '            return "false"\n'
+            "    end\n"
+            "end\n"
+            "print(state_name(State.Busy))\n"
+            "print(bool_name(false))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "exhaustive-match")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "busy\nfalse\n")
+
     def test_nested_functions_capture_variables_by_reference(self):
         result = self.invoke(
             "nested-functions.su",

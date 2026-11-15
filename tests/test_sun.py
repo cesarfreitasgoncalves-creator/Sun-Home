@@ -244,6 +244,121 @@ class SunCompilerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("inline C++ block is missing 'endcpp'", result.stderr)
 
+    def test_logical_operators_short_circuit_loops_assignments_and_returns(self):
+        result = self.invoke(
+            "control-flow.su",
+            "func add(a: number, b: number): number\n"
+            "    let result: number = a + b\n"
+            "    return result\n"
+            "end\n"
+            "func label(): string\n"
+            '    return "total"\n'
+            "end\n"
+            "func side_effect(): bool\n"
+            '    print("called")\n'
+            "    return true\n"
+            "end\n"
+            "func short_circuit(value: bool): bool\n"
+            "    return value and side_effect()\n"
+            "end\n"
+            "func short_or(value: bool): bool\n"
+            "    return value or side_effect()\n"
+            "end\n"
+            "func calculate(): number\n"
+            "    let count: number = 0\n"
+            "    while count < 3:\n"
+            "        count = count + 1\n"
+            "    end\n"
+            "    let total: number = 0\n"
+            "    for i in range(1, 4):\n"
+            "        total = total + i\n"
+            "    end\n"
+            "    for j in range(3, 0, -1):\n"
+            "        total = total + j\n"
+            "    end\n"
+            "    if not false and (count == 3 or total == 0):\n"
+            "        return add(total, count)\n"
+            "    else:\n"
+            "        return -1\n"
+            "    end\n"
+            "end\n"
+            'print("%v=%v", %v=label(), %v=calculate())\n'
+            "print(short_circuit(false))\n"
+            "print(short_circuit(true))\n"
+            "print(short_or(true))\n"
+            "print(short_or(false))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "control-flow")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "total=15\nfalse\ncalled\ntrue\ntrue\ncalled\ntrue\n",
+        )
+
+    def test_non_void_function_requires_return_on_all_paths(self):
+        result = self.invoke(
+            "missing-return.su",
+            "func incomplete(enabled: bool): number\n"
+            "    if enabled:\n"
+            "        return 1\n"
+            "    end\n"
+            "end\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must return a value on every path", result.stderr)
+
+    def test_rejects_assignment_type_mismatch_and_void_value_use(self):
+        assignment = self.invoke(
+            "bad-assignment.su",
+            'func invalid()\n'
+            '    let value: number = 1\n'
+            '    value = "text"\n'
+            "end\n",
+        )
+        self.assertNotEqual(assignment.returncode, 0)
+        self.assertIn("cannot assign std::string to double", assignment.stderr)
+
+        void_value = self.invoke(
+            "void-value.su",
+            "func act()\n"
+            "end\n"
+            "func invalid(): number\n"
+            "    return act()\n"
+            "end\n",
+        )
+        self.assertNotEqual(void_value.returncode, 0)
+        self.assertIn("does not return a value", void_value.stderr)
+
+    def test_range_rejects_zero_step_at_runtime(self):
+        result = self.invoke(
+            "zero-range.su",
+            "func start()\n"
+            "    for i in range(0, 3, 0):\n"
+            '        print("unreachable")\n'
+            "    end\n"
+            "end\n"
+            "start()\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "zero-range")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 1)
+        self.assertIn("Sun runtime error: range step cannot be zero", executable.stderr)
+
     def test_rejects_math_calls_without_import(self):
         result = self.invoke(
             "missing-math-import.su",

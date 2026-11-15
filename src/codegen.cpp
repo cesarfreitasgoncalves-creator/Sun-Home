@@ -23,7 +23,7 @@ std::string indent_statements(const std::vector<std::string>& statements, std::s
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <iostream>\n#include <sstream>\n#include <string>\n";
+    out << "#include <cmath>\n#include <iostream>\n#include <sstream>\n#include <stdexcept>\n#include <string>\n";
     for (const auto& code : program.global_cpp) {
         out << '\n' << code << '\n';
     }
@@ -35,9 +35,17 @@ std::string transpile(const Program& program) {
            "    std::ostringstream stream;\n"
            "    stream << std::boolalpha << value;\n"
            "    return stream.str();\n"
+           "}\n\n"
+           "double sun_range_next(double value, double step) {\n"
+           "    const double next = value + step;\n"
+           "    if (next == value) {\n"
+           "        throw std::runtime_error(\"range step does not advance number\");\n"
+           "    }\n"
+           "    return next;\n"
            "}\n\n";
     for (const auto& function : program.functions) {
-        out << "void sun_fn_" << function.name << '(';
+        out << (function.return_type ? cpp_type(*function.return_type) : "void")
+            << " sun_fn_" << function.name << '(';
         for (std::size_t i = 0; i < function.parameters.size(); ++i) {
             if (i) out << ", ";
             out << cpp_type(function.parameters[i].type);
@@ -46,7 +54,8 @@ std::string transpile(const Program& program) {
     }
     if (!program.functions.empty()) out << '\n';
     for (const auto& function : program.functions) {
-        out << "void sun_fn_" << function.name << '(';
+        out << (function.return_type ? cpp_type(*function.return_type) : "void")
+            << " sun_fn_" << function.name << '(';
         for (std::size_t i = 0; i < function.parameters.size(); ++i) {
             if (i) out << ", ";
             out << cpp_type(function.parameters[i].type) << " sun_arg_"
@@ -54,8 +63,13 @@ std::string transpile(const Program& program) {
         }
         out << ") {\n" << indent_statements(function.body, 4) << "}\n\n";
     }
-    out << "int main() {\n" << indent_statements(program.main_body, 4)
-        << "    return 0;\n}\n";
+    out << "int main() {\n"
+        << "    try {\n" << indent_statements(program.main_body, 8)
+        << "        return 0;\n"
+        << "    } catch (const std::exception& error) {\n"
+        << "        std::cerr << \"Sun runtime error: \" << error.what() << '\\n';\n"
+        << "        return 1;\n"
+        << "    }\n}\n";
     return out.str();
 }
 

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <istream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ struct Parameter {
 struct Function {
     std::string name;
     std::vector<Parameter> parameters;
+    std::optional<Type> return_type;
     std::vector<std::string> body;
     std::size_t line;
 };

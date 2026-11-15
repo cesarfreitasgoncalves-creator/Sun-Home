@@ -161,12 +161,64 @@ end
 classificar(2)
 ```
 
+As variaveis declaradas com `let` e os parametros podem ser reatribuidos com
+`nome = expressao`; a expressao precisa ter o mesmo tipo:
+
+```sun
+func contar(): number
+    let total: number = 0
+    total = total + 1
+    return total
+end
+```
+
 Operadores aritmeticos: `+`, `-`, `*`, `/` e `%` (resto). `+` tambem concatena
 duas strings. Comparacoes disponiveis: `==`, `!=`, `<`, `<=`, `>` e `>=`.
 Comparacoes ordenadas aceitam numeros; igualdade aceita dois valores do mesmo
 tipo. Condicoes de `if`/`elif` precisam resultar em `bool`, por exemplo uma
 comparacao, `true`/`false` ou um parametro booleano. Blocos `if` podem ter
 varios `elif` e um `else`; todo o conjunto termina com `end`.
+
+Operadores logicos `not`, `and` e `or` aceitam somente valores booleanos.
+`not` tem precedencia acima de `and`, que tem precedencia acima de `or`.
+`and` e `or` usam curto-circuito: a expressao da direita so e avaliada quando
+necessario.
+
+Loops usam condicoes booleanas e iteracao numerica por intervalo:
+
+```sun
+let i: number = 0
+while i < 3:
+    print(i)
+    i = i + 1
+end
+
+for n in range(1, 4):
+    print(n)
+end
+```
+
+`while` repete enquanto a condicao for verdadeira. `range(inicio, fim)` inclui
+o inicio e exclui o fim. Pode-se passar um terceiro argumento para o passo;
+passos negativos contam para tras e o passo zero gera um erro em tempo de
+execucao. Um passo que nao consegue avancar o valor atual tambem gera erro,
+evitando loop infinito por precisao de ponto flutuante. Os valores de `range`
+sao `number` (`double`), nao inteiros.
+
+Funcoes podem declarar retorno com `: tipo` no cabecalho, usando `string`,
+`number` ou `bool`. Sem anotacao, a funcao retorna `void`. Todo caminho de uma
+funcao com retorno tipado deve retornar um valor do tipo declarado:
+
+```sun
+func dobro(valor: number): number
+    return valor * 2
+end
+
+let resultado: number = dobro(21)
+```
+
+Funcoes com retorno podem ser chamadas em expressoes. `return` sem valor so e
+valido em funcoes sem tipo de retorno.
 
 `import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
 funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
@@ -215,12 +267,11 @@ print("Ola!")
 ```
 
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
-tipados, variaveis locais tipadas, chamadas, `print`, strings, numeros,
-booleanos, operadores aritmeticos e de comparacao, f-strings, `%v`, `if`,
-`elif`, `else`, a biblioteca `math` e C++ inline. Funcoes nao retornam valores.
-Ainda nao ha entrada interativa, loops, funcoes aninhadas, atribuicao apos
-declaracao ou comentarios no fim de uma linha. Operadores logicos
-`and`/`or`/`not` tambem nao sao suportados nesta etapa.
+tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
+numeros, booleanos, operadores aritmeticos, de comparacao e logicos, f-strings,
+`%v`, `if`/`elif`/`else`, loops `while` e `for` por `range`, retornos tipados,
+a biblioteca `math` e C++ inline. Ainda nao ha listas, entrada interativa,
+funcoes aninhadas, `break`/`continue` ou comentarios no fim de uma linha.
 
 ## 9. Erros e acessibilidade
 
@@ -240,8 +291,9 @@ manter os exemplos faceis de navegar.
 Problemas comuns:
 
 - **`source file must have the .su extension`**: confirme a extensao do arquivo.
-- **`missing 'end'`**: adicione `end` para fechar cada funcao ou bloco `if`.
+- **`missing 'end'`**: adicione `end` para fechar cada funcao, condicional ou loop.
 - **`missing 'endcpp'`**: feche cada bloco C++ com `endcpp`.
+- **`range step cannot be zero`**: use um passo diferente de zero em `range`.
 - **`unknown value`**: use um parametro declarado ou variavel local ja declarada.
 - **`not enough %v values`**: adicione um argumento `%v=...` para cada marcador.
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe

@@ -22,6 +22,7 @@ struct SourceLine {
 
 struct Signature {
     std::vector<Type> parameters;
+    std::optional<Type> return_type;
 };
 
 struct Symbol {
@@ -192,9 +193,9 @@ std::string cpp_string(const std::string& value) {
 class ExpressionParser {
 public:
     ExpressionParser(const std::string& source, std::size_t line, const Symbols& symbols,
-                     bool math_imported)
+                     bool math_imported, const Signatures& signatures)
         : tokens_(tokenize(source, line)), line_(line), symbols_(symbols),
-          math_imported_(math_imported) {}
+          math_imported_(math_imported), signatures_(signatures) {}
 
     ExprValue parse() {
         auto value = parse_binary(1);
@@ -215,17 +216,24 @@ private:
         return true;
     }
 
+    static bool is_logical_operator(const Token& token) {
+        return token.kind == Token::Kind::identifier &&
+               (token.text == "and" || token.text == "or");
+    }
+
     static int precedence(const std::string& op) {
+        if (op == "or") return 1;
+        if (op == "and") return 2;
         if (op == "==" || op == "!=" || op == "<" || op == "<=" ||
-            op == ">" || op == ">=") return 1;
-        if (op == "+" || op == "-") return 2;
-        if (op == "*" || op == "/" || op == "%") return 3;
+            op == ">" || op == ">=") return 3;
+        if (op == "+" || op == "-") return 4;
+        if (op == "*" || op == "/" || op == "%") return 5;
         return 0;
     }
 
     ExprValue parse_binary(int minimum_precedence) {
         auto left = parse_unary();
-        while (peek().kind == Token::Kind::symbol) {
+        while (peek().kind == Token::Kind::symbol || is_logical_operator(peek())) {
             const auto op = peek().text;
             const int op_precedence = precedence(op);
             if (op_precedence < minimum_precedence) break;
@@ -243,6 +251,14 @@ private:
                 throw ParseError(line_, "unary '-' requires a number");
             }
             return {Type::number, "(-(" + operand.cpp + "))", std::nullopt};
+        }
+        if (peek().kind == Token::Kind::identifier && peek().text == "not") {
+            take();
+            auto operand = parse_binary(3);
+            if (operand.type != Type::boolean) {
+                throw ParseError(line_, "'not' requires a bool value");
+            }
+            return {Type::boolean, "(!(" + operand.cpp + "))", std::nullopt};
         }
         return parse_primary();
     }
@@ -281,7 +297,41 @@ private:
                 }
                 return parse_math_call(name);
             }
-            if (accept("(")) return parse_math_call(name);
+            if (accept("(")) {
+                const auto signature = signatures_.find(name);
+                if (signature == signatures_.end()) return parse_math_call(name);
+                if (!signature->second.return_type) {
+                    throw ParseError(line_, "function '" + name + "' does not return a value");
+                }
+                std::vector<ExprValue> arguments;
+                if (!accept(")")) {
+                    do {
+                        arguments.push_back(parse_binary(1));
+                    } while (accept(","));
+                    if (!accept(")")) {
+                        throw ParseError(line_, "expected ')' after function arguments");
+                    }
+                }
+                if (arguments.size() != signature->second.parameters.size()) {
+                    throw ParseError(line_, "function '" + name + "' expects " +
+                                             std::to_string(signature->second.parameters.size()) +
+                                             " argument(s), got " +
+                                             std::to_string(arguments.size()));
+                }
+                std::ostringstream call;
+                call << "sun_fn_" << name << '(';
+                for (std::size_t i = 0; i < arguments.size(); ++i) {
+                    if (arguments[i].type != signature->second.parameters[i]) {
+                        throw ParseError(line_, "argument " + std::to_string(i + 1) +
+                                                 " of '" + name + "' must have type " +
+                                                 cpp_type(signature->second.parameters[i]));
+                    }
+                    if (i) call << ", ";
+                    call << arguments[i].cpp;
+                }
+                call << ')';
+                return {*signature->second.return_type, call.str(), std::nullopt};
+            }
             const auto found = symbols_.find(name);
             if (found == symbols_.end()) {
                 throw ParseError(line_, "unknown value '" + name + "'");
@@ -384,6 +434,14 @@ private:
 
     ExprValue make_binary(const std::string& op, const ExprValue& left,
                           const ExprValue& right) {
+        if (op == "and" || op == "or") {
+            if (left.type != Type::boolean || right.type != Type::boolean) {
+                throw ParseError(line_, "logical operators require bool values");
+            }
+            const auto cpp_op = op == "and" ? "&&" : "||";
+            return {Type::boolean, "((" + left.cpp + ") " + cpp_op + " (" + right.cpp + "))",
+                    std::nullopt};
+        }
         if (op == "+") {
             if (left.type == Type::number && right.type == Type::number) {
                 return {Type::number, "((" + left.cpp + ") + (" + right.cpp + "))",
@@ -425,6 +483,7 @@ private:
     std::size_t line_;
     const Symbols& symbols_;
     bool math_imported_;
+    const Signatures& signatures_;
 };
 
 std::string indent_statements(const std::vector<std::string>& statements, std::size_t spaces) {
@@ -493,6 +552,7 @@ public:
                 for (const auto& parameter : function.parameters) {
                     signature.parameters.push_back(parameter.type);
                 }
+                signature.return_type = function.return_type;
                 if (!signatures_.emplace(function.name, signature).second) {
                     throw ParseError(function.line, "function '" + function.name + "' is already defined");
                 }
@@ -551,8 +611,23 @@ private:
     Function parse_function_header(const SourceLine& line) {
         const auto header = trim(line.text.substr(4));
         if (header.empty()) throw ParseError(line.number, "expected 'func name(parameters)'");
-        const auto call = parse_call(header, line.number);
-        Function function{call.first, {}, {}, line.number};
+        const auto close = header.find(')');
+        if (close == std::string::npos) {
+            throw ParseError(line.number, "malformed function declaration");
+        }
+        const auto call = parse_call(header.substr(0, close + 1), line.number);
+        const auto return_annotation = trim(header.substr(close + 1));
+        std::optional<Type> return_type;
+        if (!return_annotation.empty()) {
+            if (return_annotation[0] != ':') {
+                throw ParseError(line.number, "return type must follow ':' (e.g. ': number')");
+            }
+            return_type = parse_type(trim(return_annotation.substr(1)), line.number);
+        }
+        Function function;
+        function.name = call.first;
+        function.return_type = return_type;
+        function.line = line.number;
         std::unordered_map<std::string, bool> seen;
         for (const auto& parameter_text : split_arguments(call.second, line.number)) {
             const auto colon = parameter_text.find(':');
@@ -602,10 +677,23 @@ private:
                         parameter.name,
                         Symbol{parameter.type, "sun_arg_" + parameter.name});
                 }
-                function.body = parse_block(index, function_symbols, math_imported);
+                const auto previous_return_type = active_return_type_;
+                const auto previous_function_state = inside_function_;
+                active_return_type_ = function.return_type;
+                inside_function_ = true;
+                bool definitely_returns = false;
+                function.body = parse_block(index, function_symbols, math_imported,
+                                            &definitely_returns);
+                active_return_type_ = previous_return_type;
+                inside_function_ = previous_function_state;
                 if (index == lines_.size() || lines_[index].text != "end") {
                     const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
                     throw ParseError(error_line, "function '" + function.name + "' is missing 'end'");
+                }
+                if (function.return_type && !definitely_returns) {
+                    throw ParseError(function.line,
+                                     "function '" + function.name +
+                                         "' must return a value on every path");
                 }
                 ++index;
                 functions_.push_back(std::move(function));
@@ -615,14 +703,16 @@ private:
                 global_cpp.push_back(parse_inline_cpp(index, symbols, true));
                 continue;
             }
-            body.push_back(parse_statement(index, symbols, math_imported));
+            body.push_back(parse_statement(index, symbols, math_imported, nullptr));
         }
         return body;
     }
 
     std::vector<std::string> parse_block(std::size_t& index, Symbols& symbols,
-                                         bool math_imported) {
+                                         bool math_imported,
+                                         bool* definitely_returns = nullptr) {
         std::vector<std::string> body;
+        bool returns = false;
         while (index < lines_.size()) {
             skip_ignored(index);
             if (index == lines_.size() || is_terminator(lines_[index].text)) break;
@@ -632,36 +722,44 @@ private:
             if (starts_word(lines_[index].text, "import")) {
                 throw ParseError(lines_[index].number, "imports must appear before declarations and statements");
             }
-            body.push_back(parse_statement(index, symbols, math_imported));
+            bool statement_returns = false;
+            body.push_back(parse_statement(index, symbols, math_imported,
+                                           &statement_returns));
+            returns = returns || statement_returns;
         }
+        if (definitely_returns) *definitely_returns = returns;
         return body;
     }
 
     ExprValue expression(const std::string& text, std::size_t line, const Symbols& symbols,
                          bool math_imported) const {
-        return ExpressionParser(text, line, symbols, math_imported).parse();
+        return ExpressionParser(text, line, symbols, math_imported, signatures_).parse();
     }
 
     ExprValue parse_condition(const SourceLine& line, const std::string& keyword,
                               const Symbols& symbols, bool math_imported) const {
         const auto text = trim(line.text.substr(keyword.size()));
         if (text.empty() || text.back() != ':') {
-            throw ParseError(line.number, "condition must end with ':'");
+            throw ParseError(line.number, keyword + " condition must end with ':'");
         }
         auto condition = expression(trim(text.substr(0, text.size() - 1)),
                                    line.number, symbols, math_imported);
         if (condition.type != Type::boolean) {
-            throw ParseError(line.number, "if conditions must have type bool");
+            throw ParseError(line.number, keyword + " condition must have type bool");
         }
         return condition;
     }
 
-    std::string parse_if(std::size_t& index, const Symbols& symbols, bool math_imported) {
+    std::string parse_if(std::size_t& index, const Symbols& symbols, bool math_imported,
+                         bool* definitely_returns) {
         const auto first_line = lines_[index];
         auto condition = parse_condition(first_line, "if", symbols, math_imported);
         ++index;
         Symbols branch_symbols = symbols;
-        auto branch = parse_block(index, branch_symbols, math_imported);
+        bool branch_returns = false;
+        auto branch = parse_block(index, branch_symbols, math_imported, &branch_returns);
+        bool all_branches_return = branch_returns;
+        bool has_else = false;
 
         std::ostringstream code;
         code << "if (" << condition.cpp << ") {\n"
@@ -671,7 +769,9 @@ private:
             auto elif_condition = parse_condition(branch_line, "elif", symbols, math_imported);
             ++index;
             branch_symbols = symbols;
-            branch = parse_block(index, branch_symbols, math_imported);
+            branch_returns = false;
+            branch = parse_block(index, branch_symbols, math_imported, &branch_returns);
+            all_branches_return = all_branches_return && branch_returns;
             code << " else if (" << elif_condition.cpp << ") {\n"
                  << indent_statements(branch, 4) << '}';
         }
@@ -681,7 +781,10 @@ private:
             }
             ++index;
             branch_symbols = symbols;
-            branch = parse_block(index, branch_symbols, math_imported);
+            branch_returns = false;
+            branch = parse_block(index, branch_symbols, math_imported, &branch_returns);
+            has_else = true;
+            all_branches_return = all_branches_return && branch_returns;
             code << " else {\n" << indent_statements(branch, 4) << '}';
             if (index < lines_.size() && starts_word(lines_[index].text, "elif")) {
                 throw ParseError(lines_[index].number, "'elif' cannot follow 'else'");
@@ -695,6 +798,91 @@ private:
             throw ParseError(error_line, "if block is missing 'end'");
         }
         ++index;
+        if (definitely_returns) {
+            *definitely_returns = has_else && all_branches_return;
+        }
+        return code.str();
+    }
+
+    std::string parse_while(std::size_t& index, Symbols& symbols, bool math_imported) {
+        const auto line = lines_[index];
+        auto condition = parse_condition(line, "while", symbols, math_imported);
+        ++index;
+        Symbols loop_symbols = symbols;
+        auto body = parse_block(index, loop_symbols, math_imported);
+        if (index == lines_.size() || lines_[index].text != "end") {
+            const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
+            throw ParseError(error_line, "while block is missing 'end'");
+        }
+        ++index;
+        return "while (" + condition.cpp + ") {\n" + indent_statements(body, 4) + "}";
+    }
+
+    std::string parse_for(std::size_t& index, Symbols& symbols, bool math_imported) {
+        const auto line = lines_[index];
+        const auto text = trim(line.text.substr(3));
+        if (text.empty() || text.back() != ':') {
+            throw ParseError(line.number, "for loop must end with ':'");
+        }
+        const auto loop_spec = trim(text.substr(0, text.size() - 1));
+        const auto in = loop_spec.find(" in ");
+        if (in == std::string::npos) {
+            throw ParseError(line.number, "expected 'for name in range(start, stop[, step]):'");
+        }
+        const auto name = trim(loop_spec.substr(0, in));
+        const auto range = trim(loop_spec.substr(in + 4));
+        if (!is_identifier(name)) {
+            throw ParseError(line.number, "invalid loop variable '" + name + "'");
+        }
+        if (range.rfind("range(", 0) != 0 || range.back() != ')') {
+            throw ParseError(line.number, "for loops currently require range(start, stop[, step])");
+        }
+        const auto arguments = split_arguments(range.substr(6, range.size() - 7), line.number);
+        if (arguments.size() < 2 || arguments.size() > 3) {
+            throw ParseError(line.number, "range expects 2 or 3 arguments");
+        }
+        std::vector<ExprValue> values;
+        for (const auto& argument : arguments) {
+            auto value = expression(argument, line.number, symbols, math_imported);
+            if (value.type != Type::number) {
+                throw ParseError(line.number, "range arguments must have type number");
+            }
+            values.push_back(std::move(value));
+        }
+
+        const auto id = next_loop_id_++;
+        const auto start_name = "sun_for_start_" + std::to_string(id);
+        const auto stop_name = "sun_for_stop_" + std::to_string(id);
+        const auto step_name = "sun_for_step_" + std::to_string(id);
+        const auto variable_name = "sun_loop_" + std::to_string(id) + "_" + name;
+        const auto start_value = values[0].cpp;
+        const auto stop_value = values[1].cpp;
+        const auto step_value = values.size() == 3 ? values[2].cpp : "1.0";
+
+        ++index;
+        Symbols loop_symbols = symbols;
+        loop_symbols[name] = {Type::number, variable_name};
+        auto body = parse_block(index, loop_symbols, math_imported);
+        if (index == lines_.size() || lines_[index].text != "end") {
+            const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
+            throw ParseError(error_line, "for block is missing 'end'");
+        }
+        ++index;
+
+        std::ostringstream code;
+        code << "{\n"
+             << "    const double " << start_name << " = " << start_value << ";\n"
+             << "    const double " << stop_name << " = " << stop_value << ";\n"
+             << "    const double " << step_name << " = " << step_value << ";\n"
+             << "    if (" << step_name
+             << " == 0.0) throw std::runtime_error(\"range step cannot be zero\");\n"
+             << "    for (double " << variable_name << " = " << start_name << "; "
+             << "(" << step_name << " > 0.0 ? " << variable_name << " < " << stop_name
+             << " : " << variable_name << " > " << stop_name << "); "
+             << variable_name << " = sun_range_next(" << variable_name << ", "
+             << step_name << ")) {\n"
+             << indent_statements(body, 8)
+             << "    }\n}";
         return code.str();
     }
 
@@ -723,6 +911,49 @@ private:
         }
         symbols.emplace(name, Symbol{type, "sun_var_" + name});
         return cpp_type(type) + " sun_var_" + name + " = " + value.cpp + ";";
+    }
+
+    std::string parse_assignment(const SourceLine& line, Symbols& symbols,
+                                 bool math_imported) const {
+        const auto equals = line.text.find('=');
+        const auto name = trim(line.text.substr(0, equals));
+        const auto found = symbols.find(name);
+        if (found == symbols.end()) {
+            throw ParseError(line.number, "cannot assign to undeclared value '" + name + "'");
+        }
+        const auto value = expression(trim(line.text.substr(equals + 1)), line.number,
+                                      symbols, math_imported);
+        if (value.type != found->second.type) {
+            throw ParseError(line.number, "cannot assign " + cpp_type(value.type) +
+                                           " to " + cpp_type(found->second.type) + " value '" +
+                                           name + "'");
+        }
+        return found->second.cpp_name + " = " + value.cpp + ";";
+    }
+
+    std::string parse_return(const SourceLine& line, Symbols& symbols, bool math_imported,
+                             bool* returns) const {
+        if (!inside_function_) throw ParseError(line.number, "'return' is only valid inside a function");
+        const auto value_text = trim(line.text.substr(6));
+        if (active_return_type_) {
+            if (value_text.empty()) {
+                throw ParseError(line.number, "function must return a " +
+                                               cpp_type(*active_return_type_) + " value");
+            }
+            const auto value = expression(value_text, line.number, symbols, math_imported);
+            if (value.type != *active_return_type_) {
+                throw ParseError(line.number, "return type mismatch: expected " +
+                                               cpp_type(*active_return_type_) + ", got " +
+                                               cpp_type(value.type));
+            }
+            if (returns) *returns = true;
+            return "return " + value.cpp + ";";
+        }
+        if (!value_text.empty()) {
+            throw ParseError(line.number, "void function cannot return a value");
+        }
+        if (returns) *returns = true;
+        return "return;";
     }
 
     std::string parse_print(const SourceLine& line, const std::string& arguments_text,
@@ -788,8 +1019,7 @@ private:
             }
             value = {Type::string, formatted.str(), std::nullopt};
         }
-        return "std::cout << std::boolalpha << (" + value.cpp +
-               ") << std::noboolalpha << '\\n';";
+        return "std::cout << sun_to_string(" + value.cpp + ") << '\\n';";
     }
 
     std::string parse_user_call(const SourceLine& line, const std::string& text,
@@ -823,16 +1053,51 @@ private:
         return code.str();
     }
 
-    std::string parse_statement(std::size_t& index, Symbols& symbols, bool math_imported) {
+    bool is_assignment(const std::string& text) const {
+        const auto equals = text.find('=');
+        if (equals == std::string::npos || equals == 0 || equals + 1 == text.size()) return false;
+        if (text[equals + 1] == '=' || text[equals - 1] == '=' ||
+            text[equals - 1] == '!' || text[equals - 1] == '<' || text[equals - 1] == '>') {
+            return false;
+        }
+        return is_identifier(trim(text.substr(0, equals)));
+    }
+
+    std::string parse_statement(std::size_t& index, Symbols& symbols, bool math_imported,
+                                bool* definitely_returns) {
         const auto line = lines_[index];
         const auto& text = line.text;
+        if (definitely_returns) *definitely_returns = false;
         if (text == "inline cpp:") return parse_inline_cpp(index, symbols);
         if (text == "endcpp") {
             throw ParseError(line.number, "'endcpp' without an open inline C++ block");
         }
-        if (starts_word(text, "if")) return parse_if(index, symbols, math_imported);
+        if (starts_word(text, "if")) {
+            auto result = parse_if(index, symbols, math_imported, definitely_returns);
+            return result;
+        }
+        if (starts_word(text, "while")) {
+            auto result = parse_while(index, symbols, math_imported);
+            if (definitely_returns) *definitely_returns = false;
+            return result;
+        }
+        if (starts_word(text, "for")) {
+            auto result = parse_for(index, symbols, math_imported);
+            if (definitely_returns) *definitely_returns = false;
+            return result;
+        }
         if (starts_word(text, "let")) {
             auto result = parse_let(line, symbols, math_imported);
+            ++index;
+            return result;
+        }
+        if (text == "return" || starts_word(text, "return")) {
+            auto result = parse_return(line, symbols, math_imported, definitely_returns);
+            ++index;
+            return result;
+        }
+        if (is_assignment(text)) {
+            auto result = parse_assignment(line, symbols, math_imported);
             ++index;
             return result;
         }
@@ -853,6 +1118,9 @@ private:
     std::vector<SourceLine> lines_;
     Signatures signatures_;
     std::vector<Function> functions_;
+    std::optional<Type> active_return_type_;
+    bool inside_function_ = false;
+    std::size_t next_loop_id_ = 0;
 };
 
 } // namespace

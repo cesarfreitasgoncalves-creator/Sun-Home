@@ -23,6 +23,7 @@ struct LoadedModule {
     std::map<std::string, std::string> exports;
     bool math = false;
     bool memory = false;
+    bool io = false;
 };
 
 std::string trim(const std::string& value) {
@@ -88,6 +89,14 @@ std::string rewrite_names(const std::string& source,
             const auto start = i++;
             while (i < line.size() && identifier_char(line[i])) ++i;
             const auto word = line.substr(start, i - start);
+            auto previous = start;
+            while (previous > 0 && (line[previous - 1] == ' ' || line[previous - 1] == '\t')) {
+                --previous;
+            }
+            if (previous > 0 && line[previous - 1] == '.') {
+                result << word;
+                continue;
+            }
             auto lookahead = i;
             while (lookahead < line.size() && (line[lookahead] == ' ' || line[lookahead] == '\t')) {
                 ++lookahead;
@@ -162,6 +171,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     std::vector<Import> imports;
     bool math = false;
     bool memory = false;
+    bool io = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -173,6 +183,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             const auto spec = trim(line.substr(7));
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
+            else if (spec == "io") io = true;
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -226,6 +237,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
         }
         math = math || dependency.math;
         memory = memory || dependency.memory;
+        io = io || dependency.io;
         dependencies << dependency.source;
     }
 
@@ -272,6 +284,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     loaded.source = dependencies.str() + rewrite_names(body, names, aliases);
     loaded.math = math;
     loaded.memory = memory;
+    loaded.io = io;
     loading.erase(canonical);
     cache.emplace(canonical, loaded);
     return loaded;
@@ -291,6 +304,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     std::vector<Import> imports;
     bool math = false;
     bool memory = false;
+    bool io = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -302,6 +316,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
             const auto spec = trim(line.substr(7));
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
+            else if (spec == "io") io = true;
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -348,6 +363,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
         }
         math = math || module.math;
         memory = memory || module.memory;
+        io = io || module.io;
         modules << module.source;
     }
 
@@ -357,6 +373,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     std::ostringstream result;
     if (math) result << "import math\n";
     if (memory) result << "import memory\n";
+    if (io) result << "import io\n";
     result << modules.str() << rewritten_main;
     return result.str();
 }

@@ -399,7 +399,31 @@ build/sun examples/classes.su --compile
 ./examples/classes
 ```
 
-## 7. Biblioteca `memory`
+## 7. Biblioteca `io`
+
+`import io` habilita leitura e escrita de arquivos de texto. O caminho e uma
+string e pode ser relativo ao diretorio de trabalho do executavel:
+
+```sun
+import io
+
+let path: string = "notes.txt"
+io.write_text(path, "Primeira linha\n")
+io.append_text(path, "Outra linha\n")
+
+let contents: string = io.read_text(path)
+print(contents)
+print(io.exists(path))
+```
+
+`io.write_text(path, contents)` cria ou substitui o arquivo;
+`io.append_text(path, contents)` acrescenta ao final; `io.read_text(path)`
+retorna o conteudo completo como `string`; `io.exists(path)` retorna `bool`.
+Erros ao abrir, ler ou gravar arquivos geram erros de runtime Sun e podem ser
+capturados com `try`/`catch`. A implementacao C++ isolada da biblioteca fica em
+`src/stdlib_io.cpp`, e o runtime necessario e incluido no C++ gerado.
+
+## 8. Biblioteca `memory`
 
 `import memory` habilita regioes de bytes gerenciadas, sem expor enderecos
 arbitrarios nem ponteiros nativos. Cada alocacao e limitada a 64 MiB; offsets
@@ -428,7 +452,7 @@ mesma alocacao. A memoria e liberada automaticamente quando nao houver mais
 regioes referenciando-a. O tipo `region` nao pode ser impresso, formatado ou
 comparado diretamente.
 
-## 8. C++ inline
+## 9. C++ inline
 
 Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
 que ainda nao existem na linguagem. O terminador e `endcpp`:
@@ -459,7 +483,7 @@ O trecho inline precisa ser C++ valido e compativel com o compilador escolhido.
 Ele e codigo nativo sem isolamento: pode afetar qualquer estado acessivel ao
 programa. Sun nao valida nem torna seguro esse C++.
 
-## 9. Comentarios e regras atuais
+## 10. Comentarios e regras atuais
 
 Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
 
@@ -473,12 +497,12 @@ tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
 numeros, `int`, `char`, listas homogeneas, entrada tipada com `input`, operadores
 aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
 loops `while`, `for` por `range` e `for` por lista, retornos tipados,
-`try`/`catch` para erros de runtime Sun, as bibliotecas `math` e `memory`,
-`istype`, parametros com valores padrao, imports de modulos locais, structs,
-enums, classes simples e C++ inline. Ainda nao ha funcoes aninhadas, heranca ou
-comentarios no fim de uma linha.
+`try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
+`memory`, `istype`, parametros com valores padrao, imports de modulos locais,
+structs, enums, classes simples e C++ inline. Ainda nao ha funcoes aninhadas,
+heranca ou comentarios no fim de uma linha.
 
-## 10. Erros e acessibilidade
+## 11. Erros e acessibilidade
 
 Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
 Por exemplo:
@@ -519,7 +543,7 @@ Problemas comuns:
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe
   o compilador com `--compiler`.
 
-## 11. Executar os testes
+## 12. Executar os testes
 
 Com Python 3 instalado:
 

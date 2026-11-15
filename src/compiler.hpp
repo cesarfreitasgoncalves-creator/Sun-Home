@@ -109,6 +109,7 @@ struct Program {
     std::vector<std::string> global_cpp;
     bool math_imported = false;
     bool memory_imported = false;
+    bool io_imported = false;
 };
 
 Program parse(std::istream& source);

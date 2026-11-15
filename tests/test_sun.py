@@ -517,6 +517,61 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "size=4\n65\n66\ntrue\nfalse\n")
 
+    def test_io_reads_writes_appends_and_checks_file_existence(self):
+        target = WORK / "io-output.txt"
+        result = self.invoke(
+            "io.su",
+            "import io\n"
+            f'let path: string = "{target}"\n'
+            'io.write_text(path, "Hello")\n'
+            'io.append_text(path, " Sun")\n'
+            "let contents: string = io.read_text(path)\n"
+            "print(io.exists(path))\n"
+            'print(io.exists(path + ".missing"))\n'
+            "print(contents)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "true\nfalse\nHello Sun\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "Hello Sun")
+
+    def test_io_requires_import_and_reports_read_errors(self):
+        missing_import = self.invoke(
+            "io-missing-import.su",
+            'let exists: bool = io.exists("missing.txt")\n',
+        )
+        self.assertNotEqual(missing_import.returncode, 0)
+        self.assertIn("io functions require 'import io'", missing_import.stderr)
+
+        result = self.invoke(
+            "io-read-error.su",
+            "import io\n"
+            'try:\n'
+            '    let contents: string = io.read_text("missing-file-for-io-test.txt")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-read-error")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertIn("io.read_text could not open file", executable.stdout)
+
     def test_memory_requires_import_and_rejects_regions_as_text(self):
         missing_import = self.invoke(
             "memory-missing-import.su",
@@ -710,6 +765,31 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "9 5\n")
+
+    def test_local_modules_can_import_stdlib_io(self):
+        (WORK / "file_tools.su").write_text(
+            "import io\n"
+            "func exists(path: string): bool\n"
+            "    return io.exists(path)\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "io-module-import.su",
+            "import local/file_tools as files\n"
+            'print(files.exists("a-file-that-does-not-exist"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-module-import")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "false\n")
 
     def test_structs_enums_and_simple_classes(self):
         result = self.invoke(

@@ -1,4 +1,5 @@
 #include "compiler.hpp"
+#include "stdlib_io.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -27,6 +28,9 @@ std::string transpile(const Program& program) {
     out << "#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <limits>\n"
            "#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <string>\n#include <utility>\n#include <vector>\n";
+    if (program.io_imported) {
+        out << "#include <filesystem>\n#include <fstream>\n#include <iterator>\n";
+    }
     out << R"cpp(
 class SunRuntimeError : public std::runtime_error {
 public:
@@ -173,6 +177,7 @@ void sun_list_append(std::vector<T>& values, T value) {
     values.push_back(std::move(value));
 }
 )cpp";
+    if (program.io_imported) out << io_runtime_cpp();
     if (program.memory_imported) {
         out << R"cpp(
 class SunMemoryRegion {

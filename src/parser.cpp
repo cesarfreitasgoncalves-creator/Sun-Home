@@ -327,12 +327,13 @@ std::string cpp_string(const std::string& value) {
 class ExpressionParser {
 public:
     ExpressionParser(const std::string& source, std::size_t line, const Symbols& symbols,
-                     bool math_imported, bool memory_imported,
+                     bool math_imported, bool memory_imported, bool io_imported,
                      const Signatures& signatures, const Types& types,
                      const CustomTypes& custom_types,
                      bool allow_function_calls = true)
         : tokens_(tokenize(source, line)), line_(line), symbols_(symbols),
           math_imported_(math_imported), memory_imported_(memory_imported),
+          io_imported_(io_imported),
           signatures_(signatures), types_(types), custom_types_(custom_types),
           allow_function_calls_(allow_function_calls) {}
 
@@ -524,6 +525,16 @@ private:
                     throw ParseError(line_, "expected '(' after memory function name");
                 }
                 return parse_memory_call(name);
+            }
+            if (name == "io" && accept(".")) {
+                if (peek().kind != Token::Kind::identifier) {
+                    throw ParseError(line_, "expected an io function after 'io.'");
+                }
+                name = take().text;
+                if (!accept("(")) {
+                    throw ParseError(line_, "expected '(' after io function name");
+                }
+                return parse_io_call(name);
             }
             if (name == "istype" && accept("(")) return parse_istype_call();
             if (accept("(")) {
@@ -809,6 +820,38 @@ private:
         throw ParseError(line_, "unknown memory function '" + name + "'");
     }
 
+    ExprValue parse_io_call(const std::string& name) {
+        if (!io_imported_) throw ParseError(line_, "io functions require 'import io'");
+        if (!allow_function_calls_) {
+            throw ParseError(line_, "default values cannot call functions");
+        }
+        if (name == "write_text" || name == "append_text") {
+            throw ParseError(line_, "io." + name + " is a statement, not an expression");
+        }
+        std::vector<ExprValue> arguments;
+        if (!accept(")")) {
+            do {
+                arguments.push_back(parse_binary(1));
+            } while (accept(","));
+            if (!accept(")")) throw ParseError(line_, "expected ')' after io arguments");
+        }
+        if (name == "read_text") {
+            if (arguments.size() != 1 || arguments[0].type != Type::string) {
+                throw ParseError(line_, "io.read_text expects one string path");
+            }
+            return {Type::string, "sun_io_read_text(" + arguments[0].cpp + ")",
+                    std::nullopt};
+        }
+        if (name == "exists") {
+            if (arguments.size() != 1 || arguments[0].type != Type::string) {
+                throw ParseError(line_, "io.exists expects one string path");
+            }
+            return {Type::boolean, "sun_io_exists(" + arguments[0].cpp + ")",
+                    std::nullopt};
+        }
+        throw ParseError(line_, "unknown io function '" + name + "'");
+    }
+
     ExprValue parse_fstring(const std::string& text) {
         std::vector<std::string> parts;
         std::string literal;
@@ -1019,6 +1062,7 @@ private:
     const Symbols& symbols_;
     bool math_imported_;
     bool memory_imported_;
+    bool io_imported_;
     const Signatures& signatures_;
     const Types& types_;
     const CustomTypes& custom_types_;
@@ -1056,6 +1100,7 @@ public:
         std::size_t index = 0;
         bool seen_math = false;
         bool seen_memory = false;
+        bool seen_io = false;
         skip_ignored(index);
         while (index < lines_.size() && starts_word(lines_[index].text, "import")) {
             const auto module = trim(lines_[index].text.substr(6));
@@ -1067,14 +1112,19 @@ public:
                 if (seen_memory) throw ParseError(lines_[index].number, "duplicate import 'memory'");
                 seen_memory = true;
                 result.memory_imported = true;
+            } else if (module == "io") {
+                if (seen_io) throw ParseError(lines_[index].number, "duplicate import 'io'");
+                seen_io = true;
+                result.io_imported = true;
             } else {
                 throw ParseError(lines_[index].number,
-                                 "supported imports are 'math' and 'memory'");
+                                 "supported imports are 'math', 'memory', and 'io'");
             }
             ++index;
             skip_ignored(index);
         }
         memory_imported_ = result.memory_imported;
+        io_imported_ = result.io_imported;
         prepare_custom_types(index, result);
         for (std::size_t i = index; i < lines_.size(); ++i) {
             if (is_ignored(lines_[i])) continue;
@@ -1126,7 +1176,7 @@ public:
                 if (!parameter.default_value) continue;
                 const auto value = ExpressionParser(*parameter.default_value, line.number,
                                                     no_symbols, result.math_imported,
-                                                    result.memory_imported,
+                                                    result.memory_imported, result.io_imported,
                                                     signatures_, types_, custom_types_,
                                                     false).parse();
                 if (!can_assign(parameter.type, value.type)) {
@@ -1555,7 +1605,7 @@ private:
 
     ExprValue expression(const std::string& text, std::size_t line, const Symbols& symbols,
                          bool math_imported) const {
-        return ExpressionParser(text, line, symbols, math_imported, memory_imported_,
+        return ExpressionParser(text, line, symbols, math_imported, memory_imported_, io_imported_,
                                 signatures_, types_, custom_types_).parse();
     }
 
@@ -1989,6 +2039,28 @@ private:
                numeric(value) + ");";
     }
 
+    std::string parse_io_statement(const SourceLine& line, const std::string& text,
+                                   const Symbols& symbols, bool math_imported) const {
+        if (!io_imported_) {
+            throw ParseError(line.number, "io functions require 'import io'");
+        }
+        const auto call = parse_call(text.substr(3), line.number);
+        if (call.first != "write_text" && call.first != "append_text") {
+            throw ParseError(line.number,
+                             "only io.write_text and io.append_text are standalone io statements");
+        }
+        const auto arguments = split_arguments(call.second, line.number);
+        if (arguments.size() != 2) {
+            throw ParseError(line.number, "io." + call.first + " expects (path, contents)");
+        }
+        const auto path = expression(arguments[0], line.number, symbols, math_imported);
+        const auto contents = expression(arguments[1], line.number, symbols, math_imported);
+        if (path.type != Type::string || contents.type != Type::string) {
+            throw ParseError(line.number, "io." + call.first + " expects string path and contents");
+        }
+        return "sun_io_" + call.first + "(" + path.cpp + ", " + contents.cpp + ");";
+    }
+
     std::string parse_list_append(const SourceLine& line, const std::string& text,
                                   const Symbols& symbols, bool math_imported) const {
         const auto method = text.find(".append(");
@@ -2202,6 +2274,11 @@ private:
             ++index;
             return result;
         }
+        if (text.rfind("io.", 0) == 0) {
+            auto result = parse_io_statement(line, text, symbols, math_imported);
+            ++index;
+            return result;
+        }
         const auto append_method = text.find(".append(");
         if (append_method != std::string::npos &&
             is_identifier(trim(text.substr(0, append_method)))) {
@@ -2260,6 +2337,7 @@ private:
     std::size_t next_catch_id_ = 0;
     std::size_t loop_depth_ = 0;
     bool memory_imported_ = false;
+    bool io_imported_ = false;
     Types types_;
     CustomTypes custom_types_;
 };

@@ -29,6 +29,7 @@ em [HOWUSE.md](HOWUSE.md).
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
   verificacao de bounds para leitura e escrita.
+- `import io` para leitura, escrita, append e verificacao de arquivos.
 - Imports de modulos locais com alias, structs, enums e classes simples com
   campos, metodos e `init`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.

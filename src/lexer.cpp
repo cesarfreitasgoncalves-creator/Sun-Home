@@ -89,7 +89,7 @@ std::vector<Token> tokenize(const std::string& source, std::size_t line) {
                 continue;
             }
         }
-        if (std::string("+-*/%<>()=,.[]").find(c) != std::string::npos) {
+        if (std::string("+-*/%<>()=,.[]{}:").find(c) != std::string::npos) {
             tokens.push_back({Token::Kind::symbol, std::string(1, c)});
             ++i;
             continue;

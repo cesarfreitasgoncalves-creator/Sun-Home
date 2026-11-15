@@ -146,8 +146,9 @@ std::string function_name(const std::string& line) {
 }
 
 bool is_block_start(const std::string& text) {
-    return text == "try:" || text.rfind("if ", 0) == 0 ||
-           text.rfind("while ", 0) == 0 || text.rfind("for ", 0) == 0;
+    return !function_name(text).empty() || text == "try:" || text.rfind("if ", 0) == 0 ||
+           text.rfind("while ", 0) == 0 || text.rfind("for ", 0) == 0 ||
+           text.rfind("match ", 0) == 0;
 }
 
 LoadedModule load_module(const fs::path& module_path, const fs::path& project_root,
@@ -244,13 +245,29 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     std::map<std::string, std::string> names;
     LoadedModule loaded;
     const auto prefix = mangle_path(fs::relative(canonical, project_root));
+    int declaration_depth = 0;
+    bool declarations_in_cpp = false;
     for (std::size_t i = first_content; i < lines.size(); ++i) {
-        const auto name = function_name(lines[i]);
+        const auto text = trim(lines[i]);
+        if (declarations_in_cpp) {
+            if (text == "endcpp") declarations_in_cpp = false;
+            continue;
+        }
+        if (text == "inline cpp:") {
+            declarations_in_cpp = true;
+            continue;
+        }
+        if (text == "end") {
+            if (declaration_depth > 0) --declaration_depth;
+            continue;
+        }
+        const auto name = declaration_depth == 0 ? function_name(text) : "";
         if (!name.empty()) {
             const auto renamed = prefix + "_" + name;
             names.emplace(name, renamed);
             loaded.exports.emplace(name, renamed);
         }
+        if (is_block_start(text)) ++declaration_depth;
     }
 
     int function_depth = 0;

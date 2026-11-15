@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -17,6 +18,8 @@ struct Options {
     fs::path source;
     fs::path output;
     bool compile = false;
+    bool check = false;
+    bool output_explicit = false;
     bool compiler_explicit = false;
     std::string compiler = "g++";
 };
@@ -32,7 +35,8 @@ std::string shell_quote(const std::string& value) {
 }
 
 void print_usage(std::ostream& out) {
-    out << "Usage: sun <source.su> [-o <output.cpp>] [--compile] [--compiler <path>]\n";
+    out << "Usage: sun <source.su> [-o <output.cpp>] [--compile | --check] "
+           "[--compiler <path>]\n";
 }
 
 Options parse_options(int argc, char** argv) {
@@ -50,8 +54,11 @@ Options parse_options(int argc, char** argv) {
         if (argument == "-o") {
             if (++i >= argc) throw std::runtime_error("'-o' requires an output path");
             options.output = argv[i];
+            options.output_explicit = true;
         } else if (argument == "--compile") {
             options.compile = true;
+        } else if (argument == "--check") {
+            options.check = true;
         } else if (argument == "--compiler") {
             if (++i >= argc) throw std::runtime_error("'--compiler' requires a compiler path");
             options.compiler = argv[i];
@@ -66,6 +73,15 @@ Options parse_options(int argc, char** argv) {
     if (options.source.extension() != ".su") {
         throw std::runtime_error("source file must have the .su extension");
     }
+    if (options.check && options.compile) {
+        throw std::runtime_error("'--check' cannot be combined with '--compile'");
+    }
+    if (options.check && options.output_explicit) {
+        throw std::runtime_error("'-o' cannot be used with '--check'");
+    }
+    if (options.check && options.compiler_explicit) {
+        throw std::runtime_error("'--compiler' cannot be used with '--check'");
+    }
     if (options.output == "-") {
         if (options.compile) {
             throw std::runtime_error("cannot compile when C++ output is sent to stdout");
@@ -77,13 +93,33 @@ Options parse_options(int argc, char** argv) {
     return options;
 }
 
+void print_parse_error(const sun::ParseError& error, const std::string& source) {
+    std::cerr << "sun: line " << error.line << ": error: " << error.what() << '\n';
+    std::istringstream lines(source);
+    std::string text;
+    for (std::size_t number = 1; number <= error.line && std::getline(lines, text); ++number) {
+        if (number != error.line) continue;
+        const auto first = text.find_first_not_of(" \t\r");
+        const auto column = first == std::string::npos ? text.size() : first;
+        const auto width = std::to_string(number).size();
+        std::cerr << "  " << std::setw(static_cast<int>(width)) << number << " | " << text << '\n'
+                  << "  " << std::string(width, ' ') << " | "
+                  << std::string(column, ' ') << "^\n";
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string source_text;
     try {
         const auto options = parse_options(argc, argv);
-        std::istringstream input(sun::load_project_source(options.source));
-        const auto generated = sun::transpile(sun::parse(input));
+        source_text = sun::load_project_source(options.source);
+        std::istringstream input(source_text);
+        const auto program = sun::parse(input);
+        if (options.check) return 0;
+
+        const auto generated = sun::transpile(program);
         if (options.output == "-") {
             std::cout << generated;
         } else {
@@ -115,7 +151,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     } catch (const sun::ParseError& error) {
-        std::cerr << "sun: line " << error.line << ": error: " << error.what() << '\n';
+        print_parse_error(error, source_text);
     } catch (const std::exception& error) {
         std::cerr << "sun: error: " << error.what() << '\n';
         if (argc < 2) print_usage(std::cerr);

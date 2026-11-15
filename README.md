@@ -22,6 +22,9 @@ em [HOWUSE.md](HOWUSE.md).
 - Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
 - Listas homogeneas tipadas, indexacao, `append`, `len` e `for` sobre listas.
+- Dicionarios homogeneos com chaves escalares, indexacao, atualizacao, `len` e iteracao.
+- `match` para valores escalares e variantes de enum; enums podem carregar campos tipados.
+- Funcoes aninhadas com captura de variaveis externas por referencia.
 - `input(prompt, tipo)` para leitura tipada e `try`/`catch` para erros de runtime Sun.
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
@@ -37,9 +40,13 @@ em [HOWUSE.md](HOWUSE.md).
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
 - Erros de compilacao com numero da linha, sem saida colorida obrigatoria.
+- `--check` para validar sintaxe e tipos sem gerar C++.
 
-Sun ainda esta em prototipo: heranca, funcoes aninhadas e comentarios no fim de
-uma linha ainda nao sao suportados.
+Comentarios com `#` podem aparecer no fim de uma linha fora de strings. Sun
+ainda esta em prototipo; heranca continua sem suporte.
+
+`inline cpp` executa codigo C++ nativo sem isolamento ou validacao de seguranca.
+Use somente com codigo confiavel; nao e uma sandbox.
 
 O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
 [HOWUSE.md](HOWUSE.md) para detalhes, exemplos e regras do C++ inline.

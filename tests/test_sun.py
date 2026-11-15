@@ -39,6 +39,94 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("Usage: sun <source.su>", result.stdout)
+        self.assertIn("--check", result.stdout)
+
+    def test_check_validates_without_creating_output(self):
+        result = self.invoke(
+            "check-only.su",
+            'let count: int = int(3)\nprint(count)\n',
+            "--check",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse((WORK / "check-only.cpp").exists())
+
+    def test_check_reports_errors_with_source_context(self):
+        result = self.invoke("check-error.su", 'print("ok")\nmissing()\n', "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("line 2: error: unknown function 'missing'", result.stderr)
+        self.assertIn("  2 | missing()", result.stderr)
+        self.assertIn("    | ^", result.stderr)
+        self.assertFalse((WORK / "check-error.cpp").exists())
+
+    def test_check_rejects_output_and_compilation_options(self):
+        ignored_output = WORK / "ignored.cpp"
+        for arguments in (("--compile",), ("-o", str(ignored_output)), ("--compiler", "g++")):
+            with self.subTest(arguments=arguments):
+                result = self.invoke("check-options.su", 'print("ok")\n',
+                                     "--check", *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--check", result.stderr)
+                self.assertFalse((WORK / "check-options.cpp").exists())
+                self.assertFalse(ignored_output.exists())
+
+    def test_trailing_comments_preserve_strings_and_inline_cpp(self):
+        result = self.invoke(
+            "trailing-comments.su",
+            "func show()\n"
+            '    print("Sun # language comment") # ignored after expression\n'
+            "    inline cpp:\n"
+            '        std::cout << "C++ comment follows" << \'\\n\'; // # remains C++ text\n'
+            "    endcpp\n"
+            "end\n"
+            "show()\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "trailing-comments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Sun # language comment\nC++ comment follows\n")
+
+    def test_typed_dictionaries_support_lookup_update_length_and_iteration(self):
+        result = self.invoke(
+            "dictionaries.su",
+            "let scores: dict[string, number] = {}\n"
+            'scores["Ada"] = 10\n'
+            'scores["Bo"] = 20\n'
+            'scores["Ada"] = 15\n'
+            'print(scores["Ada"])\n'
+            "print(len(scores))\n"
+            "print(scores)\n"
+            "for key in scores:\n"
+            "    print(key)\n"
+            "end\n"
+            "try:\n"
+            '    print(scores["missing"])\n'
+            "catch error:\n"
+            '    print(error)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "dictionaries")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "15\n2\n{Ada: 15, Bo: 20}\nAda\nBo\ndictionary key not found\n",
+        )
 
     def test_transpiles_and_compiles_function_calls_and_strings(self):
         result = self.invoke(
@@ -742,7 +830,10 @@ class SunCompilerTests(unittest.TestCase):
     def test_local_module_alias_and_standard_library_precedence(self):
         (WORK / "math.su").write_text(
             "func sqrt(value: number): number\n"
-            "    return value + 1\n"
+            "    func increment(value: number): number\n"
+            "        return value + 1\n"
+            "    end\n"
+            "    return increment(value)\n"
             "end\n",
             encoding="utf-8",
         )
@@ -843,6 +934,101 @@ class SunCompilerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown value 'Green' in enum 'Color'", result.stderr)
 
+    def test_payload_enums_and_match(self):
+        result = self.invoke(
+            "enum-match.su",
+            "enum Result\n"
+            "    Ok(value: number)\n"
+            "    Error(message: string)\n"
+            "    Pending\n"
+            "end\n"
+            "let result: Result = Result.Ok(42)\n"
+            "print(result)\n"
+            "match result:\n"
+            "    case Result.Ok(value):\n"
+            "        value = value + 1\n"
+            "        print(value)\n"
+            "    case Result.Error(message):\n"
+            "        print(message)\n"
+            "    else:\n"
+            '        print("pending")\n'
+            "end\n"
+            "let status: number = 2\n"
+            "match status:\n"
+            "    case 1:\n"
+            '        print("one")\n'
+            "    case 2:\n"
+            '        print("two")\n'
+            "    else:\n"
+            '        print("other")\n'
+            "end\n"
+            "let count: int = int(1)\n"
+            "match count:\n"
+            "    case int(1):\n"
+            '        print("integer")\n'
+            "    else:\n"
+            '        print("other integer")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "enum-match")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Ok\n43\ntwo\ninteger\n")
+
+    def test_nested_functions_capture_variables_by_reference(self):
+        result = self.invoke(
+            "nested-functions.su",
+            "func run(): number\n"
+            "    let total: number = 0\n"
+            "    func add(value: number)\n"
+            "        total = total + value\n"
+            "    end\n"
+            "    func sum(value: int): int\n"
+            "        if value <= int(0):\n"
+            "            return int(0)\n"
+            "        end\n"
+            "        return value + sum(value - int(1))\n"
+            "    end\n"
+            "    add(3)\n"
+            "    add(4)\n"
+            "    return total + number(sum(int(4)))\n"
+            "end\n"
+            "print(run())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "nested-functions")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "17\n")
+
+    def test_nested_function_is_not_visible_outside_its_scope(self):
+        result = self.invoke(
+            "nested-function-scope.su",
+            "func outer()\n"
+            "    func hidden()\n"
+            "        print(\"hidden\")\n"
+            "    end\n"
+            "end\n"
+            "outer()\n"
+            "hidden()\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown function 'hidden'", result.stderr)
+
     def test_try_catches_input_errors_but_not_compile_errors(self):
         result = self.invoke(
             "input-error.su",
@@ -941,6 +1127,8 @@ class SunCompilerTests(unittest.TestCase):
         result = self.invoke("bad-call.su", 'print("start")\nmissing()\n')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("line 2: error: unknown function 'missing'", result.stderr)
+        self.assertIn("  2 | missing()", result.stderr)
+        self.assertIn("    | ^", result.stderr)
         self.assertFalse((WORK / "bad-call.cpp").exists())
 
     def test_reports_missing_end(self):

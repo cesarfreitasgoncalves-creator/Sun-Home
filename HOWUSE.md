@@ -28,6 +28,18 @@ build/sun --help
 O core esta dividido em `src/main.cpp` (CLI), `src/lexer.cpp` (tokens),
 `src/parser.cpp` (sintaxe e verificacao de tipos), `src/codegen.cpp` (geracao
 de C++) e `src/compiler.hpp` (tipos e interface entre os modulos).
+`print`, suas expressoes e as instrucoes de controle sao mantidos como nos
+estruturados entre parser e gerador. Nas demais instrucoes, a conversao das
+expressoes ainda ocorre durante a analise e pode ser migrada incrementalmente.
+
+Para verificar sintaxe e tipos sem gravar C++ nem executar o compilador C++:
+
+```sh
+build/sun examples/hello.su --check
+```
+
+Em caso de erro, Sun mostra a linha e um trecho do codigo com um marcador de
+posicao. `--check` nao pode ser combinado com `--compile`, `-o` ou `--compiler`.
 
 ## 3. Transpilar e compilar um programa
 
@@ -238,6 +250,30 @@ tipo. `len` aceita listas e strings. Listas podem ser passadas e retornadas de
 funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
 aninhadas e listas de `region` nao sao suportadas.
 
+### Dicionarios
+
+Dicionarios declaram os tipos homogeneos de chave e valor com
+`dict[chave, valor]`. As chaves aceitas sao `string`, `int`, `bool` e `char`;
+os valores podem ser `string`, `number`, `int`, `bool` ou `char`. Um dicionario
+vazio precisa de anotacao de tipo:
+
+```sun
+let notas: dict[string, number] = {}
+notas["Ada"] = 10
+notas["Lin"] = 9.5
+print(notas["Ada"])
+print(len(notas))
+
+for nome in notas:
+    print(nome)
+end
+```
+
+Literais tambem podem ser escritos como `{"Ada": 10, "Lin": 9.5}`. A leitura
+de uma chave inexistente gera erro de runtime; a atribuicao insere ou atualiza
+a chave. A iteracao visita as chaves em ordem crescente. Dicionarios aninhados,
+valores compostos e chaves `number` nao sao suportados.
+
 Loops usam condicoes booleanas, iteracao por lista e iteracao numerica por
 intervalo:
 
@@ -293,6 +329,27 @@ Parametros com default precisam ser os ultimos. Os defaults aceitam expressoes
 constantes do tipo declarado, mas nao podem depender de variaveis nem chamar
 funcoes. Ao chamar a funcao, pode-se omitir qualquer sufixo de parametros que
 tenha default.
+
+Funcoes tambem podem ser declaradas dentro de outra funcao ou bloco. Elas so
+ficam visiveis no escopo onde foram declaradas e podem capturar variaveis
+visiveis do escopo externo por referencia, inclusive para altera-las:
+
+```sun
+func executar(): number
+    let total: number = 0
+    func adicionar(valor: number)
+        total = total + valor
+    end
+    adicionar(3)
+    adicionar(4)
+    return total
+end
+
+print(executar())
+```
+
+Funcoes aninhadas aceitam parametros tipados e retorno tipado, inclusive
+recursao. Parametros com valores padrao ainda nao sao aceitos nelas.
 
 `istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
 `number`, `bool`, `int`, `char` ou `region` (que requer `import memory`) e
@@ -392,6 +449,43 @@ Campos podem usar os tipos escalares ja suportados, mas nao outros tipos
 customizados ou listas. Heranca, classes genericas e listas de objetos ainda nao
 sao suportadas.
 
+Enums podem declarar variantes com campos escalares, e `match` seleciona um
+bloco por valor ou variante. Os campos de uma variante podem ser ligados a nomes
+no padrao; `_` ignora um campo. `else` e opcional e nao ha fallthrough:
+
+```sun
+enum Result
+    Ok(value: number)
+    Error(message: string)
+    Pending
+end
+
+let result: Result = Result.Ok(42)
+match result:
+    case Result.Ok(value):
+        print(value)
+    case Result.Error(message):
+        print(message)
+    case Result.Pending:
+        print("pending")
+end
+
+match 2:
+    case 1:
+        print("one")
+    case 2:
+        print("two")
+    else:
+        print("other")
+end
+```
+
+Os tipos dos valores de cada payload devem ser escalares (`string`, `number`,
+`bool`, `int` ou `char`). Padroes escalares precisam ter o mesmo tipo do valor
+analisado; para `int` e `char`, escreva a conversao literal, como `int(1)` ou
+`char("A")`. A variante enum pode ser impressa; a representacao mostra o nome
+da variante.
+
 O exemplo executavel completo esta em `examples/classes.su`:
 
 ```sh
@@ -457,6 +551,10 @@ comparado diretamente.
 Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
 que ainda nao existem na linguagem. O terminador e `endcpp`:
 
+> **Aviso:** o conteudo de `inline cpp` e compilado e executado como C++ nativo,
+> com os mesmos privilegios do programa. Sun nao o isola, valida nem torna
+> seguro. Use somente com codigo confiavel; esse recurso nao e uma sandbox.
+
 ```sun
 inline cpp:
 #include <iostream>
@@ -480,17 +578,22 @@ os parametros e variaveis Sun visiveis ali, usando seus nomes originais.
 Identificadores C++ reservados nao podem ser expostos como aliases.
 
 O trecho inline precisa ser C++ valido e compativel com o compilador escolhido.
-Ele e codigo nativo sem isolamento: pode afetar qualquer estado acessivel ao
-programa. Sun nao valida nem torna seguro esse C++.
+Ele pode acessar ou afetar qualquer estado disponivel ao programa, inclusive
+arquivos e outros recursos do sistema operacional, sujeito aos privilegios do
+processo.
 
 ## 10. Comentarios e regras atuais
 
-Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
+Linhas vazias e comentarios iniciados por `#` sao ignorados. O comentario pode
+aparecer depois de uma instrucao e nao altera `#` dentro de uma string:
 
 ```sun
 # Este e um comentario
-print("Ola!")
+print("Ola!") # comentario no fim da linha
 ```
+
+Dentro de `inline cpp`, as linhas sao copiadas literalmente; use os comentarios
+normais de C++ (`//` ou `/* ... */`) nesse bloco.
 
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
@@ -499,8 +602,8 @@ aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
 loops `while`, `for` por `range` e `for` por lista, retornos tipados,
 `try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
 `memory`, `istype`, parametros com valores padrao, imports de modulos locais,
-structs, enums, classes simples e C++ inline. Ainda nao ha funcoes aninhadas,
-heranca ou comentarios no fim de uma linha.
+structs, enums com payload, `match`, classes simples, funcoes aninhadas,
+dicionarios e C++ inline. Heranca ainda nao e suportada.
 
 ## 11. Erros e acessibilidade
 

@@ -246,9 +246,14 @@ print(len(notas))
 Os tipos de elemento aceitos sao `number`, `int`, `string`, `bool` e `char`.
 Indices comecam em zero; leitura e escrita fora dos limites, ou com indice
 negativo/fracionario, geram erro de runtime. `append` exige um item do mesmo
-tipo. `len` aceita listas e strings. Listas podem ser passadas e retornadas de
+tipo. `contains(item)` testa presenca. `remove(item)` apaga a primeira
+ocorrencia e retorna `bool`. `insert(index, item)` aceita indices entre zero e
+`len(lista)`, incluindo o final. `pop(index)` remove e retorna um item. Os
+indices de `insert` e `pop` podem ser `int` ou `number`; valores fracionarios
+ou fora do intervalo geram erro de runtime. `clear()` esvazia a lista.
+`len` aceita listas e strings. Listas podem ser passadas e retornadas de
 funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
-aninhadas e listas de `region` nao sao suportadas.
+aninhadas, listas de `region` e listas de tuplas nao sao suportadas.
 
 ### Dicionarios
 
@@ -278,6 +283,35 @@ valores compostos e chaves `number` nao sao suportados.
 `dicionario.contains(chave)` devolve `bool`. `dicionario.remove(chave)` remove
 a entrada e devolve `true` se ela existia ou `false` se nao existia; tambem pode
 ser chamada como instrucao quando o resultado nao e necessario.
+`dicionario.keys()` e `.values()` retornam listas na ordem das chaves do
+dicionario. `dicionario.get(chave, padrao)` retorna o valor armazenado ou o
+padrao quando a chave nao existe; o padrao precisa ter o tipo dos valores.
+`dicionario.clear()` remove todas as entradas.
+
+### Tuplas
+
+Tuplas juntam valores de tipos escalares diferentes em uma estrutura fixa e
+imutavel:
+
+```sun
+func rotulo(par: tuple[int, string]): tuple[string, int]
+    return (par[1], par[0])
+end
+
+let pessoa: tuple[int, string] = (int(12), "Ada")
+let invertida: tuple[string, int] = rotulo(pessoa)
+print(pessoa)
+print(pessoa[1])
+print(invertida)
+```
+
+Uma tupla pode conter `string`, `number`, `bool`, `int` ou `char`. A anotacao
+lista os tipos na ordem dos elementos; tuplas de um item usam a forma
+`tuple[bool]` e literal `(true,)`. Os indices precisam ser literais inteiros
+nao negativos, verificados durante a compilacao. Tuplas podem ser atribuidas,
+passadas e retornadas, e comparadas com outra tupla do mesmo tipo. Atribuir a
+um elemento, aninhar tuplas ou colocar tuplas em listas/dicionarios nao e
+suportado.
 
 Loops usam condicoes booleanas, iteracao por lista e iteracao numerica por
 intervalo:
@@ -356,14 +390,19 @@ print(executar())
 Funcoes aninhadas aceitam parametros tipados e retorno tipado, inclusive
 recursao. Parametros com valores padrao ainda nao sao aceitos nelas.
 
-`istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
-`number`, `bool`, `int`, `char` ou `region` (que requer `import memory`) e
-devolve `bool`:
+`istype(valor, tipo)` compara o tipo estatico de um valor com os tipos
+escalares `string`, `number`, `bool`, `int` e `char`, ou com as categorias
+`list`, `dict` e `tuple`. `region` tambem pode ser consultado quando
+`import memory` esta ativo. As categorias reconhecem colecoes independentemente
+dos tipos dos elementos ou das chaves:
 
 ```sun
 let idade: number = 20
 print(istype(idade, number))
 print(istype(idade, string))
+print(istype([1, 2], list))
+print(istype({"Ada": 12}, dict))
+print(istype(("Ada", int(12)), tuple))
 ```
 
 Como Sun e estaticamente tipada, `istype` e decidido durante a compilacao e

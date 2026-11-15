@@ -21,8 +21,11 @@ em [HOWUSE.md](HOWUSE.md).
 - Chamadas de funcao e `print(...)`.
 - Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
-- Listas homogeneas tipadas, indexacao, `append`, `len` e `for` sobre listas.
-- Dicionarios homogeneos com chaves escalares, indexacao, atualizacao, `len` e iteracao.
+- Listas homogeneas tipadas com indexacao, `append`, `insert`, `remove`,
+  `pop`, `contains`, `clear`, `len` e iteracao.
+- Dicionarios homogeneos com `keys`, `values`, `get`, `remove`, `contains`,
+  `clear`, indexacao, `len` e iteracao.
+- Tuplas heterogeneas, fixas e imutaveis com acesso por indice literal.
 - `match` para valores escalares e variantes de enum; enums podem carregar campos tipados.
 - Funcoes aninhadas com captura de variaveis externas por referencia.
 - `input(prompt, tipo)` para leitura tipada e `try`/`catch` para erros de runtime Sun.

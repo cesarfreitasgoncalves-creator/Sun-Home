@@ -135,6 +135,140 @@ class SunCompilerTests(unittest.TestCase):
             "dictionary key not found\ntrue\nfalse\n1\n",
         )
 
+    def test_dictionary_keys_values_get_and_clear(self):
+        result = self.invoke(
+            "dictionary-operations.su",
+            'let ages: dict[string, int] = {"Ada": int(37), "Lin": int(31)}\n'
+            "print(ages.keys())\n"
+            "print(ages.values())\n"
+            'print(ages.get("Ada", int(0)))\n'
+            'print(ages.get("Grace", int(0)))\n'
+            "ages.clear()\n"
+            "print(len(ages))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "dictionary-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "[Ada, Lin]\n[37, 31]\n37\n0\n0\n")
+
+    def test_additional_list_operations(self):
+        result = self.invoke(
+            "list-operations.su",
+            "let values: list[int] = [int(1), int(2), int(2)]\n"
+            "print(values.contains(int(2)))\n"
+            "values.insert(int(1), int(9))\n"
+            "print(values)\n"
+            "let removed: bool = values.remove(int(2))\n"
+            "print(removed)\n"
+            "let popped: int = values.pop(int(1))\n"
+            "print(popped)\n"
+            "print(values)\n"
+            "print(values.remove(int(9)))\n"
+            "values.insert(int(2), int(3))\n"
+            "print(values)\n"
+            "values.clear()\n"
+            "print(len(values))\n"
+            "try:\n"
+            "    values.pop(int(0))\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "list-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\n[1, 9, 2, 2]\ntrue\n9\n[1, 2]\nfalse\n"
+            "[1, 2, 3]\n0\n"
+            "list pop index out of bounds or not a non-negative integer\n",
+        )
+
+    def test_tuples_are_typed_immutable_and_indexed_at_compile_time(self):
+        result = self.invoke(
+            "tuples.su",
+            "func swap(pair: tuple[int, string]): tuple[string, int]\n"
+            "    return (pair[1], pair[0])\n"
+            "end\n"
+            'let pair: tuple[int, string] = (int(42), "Ada")\n'
+            "let swapped: tuple[string, int] = swap(pair)\n"
+            "print(pair)\n"
+            "print(pair[0])\n"
+            "print(pair[1])\n"
+            "print(swapped)\n"
+            "let singleton: tuple[bool] = (true,)\n"
+            "print(singleton)\n"
+            'print(pair == (int(42), "Ada"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "tuples")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "(42, Ada)\n42\nAda\n(Ada, 42)\n(true,)\ntrue\n",
+        )
+
+        invalid_index = self.invoke(
+            "dynamic-tuple-index.su",
+            'let pair: tuple[int, string] = (int(42), "Ada")\n'
+            "let index: int = int(0)\n"
+            "print(pair[index])\n",
+            "--check",
+        )
+        self.assertNotEqual(invalid_index.returncode, 0)
+        self.assertIn("tuple index must be a non-negative integer literal",
+                      invalid_index.stderr)
+
+    def test_istype_recognizes_collection_categories(self):
+        result = self.invoke(
+            "collection-istype.su",
+            'print(istype((1, 2), tuple))\n'
+            'print(istype(("one", true), tuple))\n'
+            'print(istype(1, tuple))\n'
+            'print(istype([1, 2], list))\n'
+            'print(istype([], list))\n'
+            'print(istype(1, list))\n'
+            'print(istype({"one": 1}, dict))\n'
+            'print(istype({}, dict))\n'
+            'print(istype((1, 2), dict))\n'
+            'print(istype(1, dict))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "collection-istype")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\n",
+        )
+
     def test_transpiles_and_compiles_function_calls_and_strings(self):
         result = self.invoke(
             "greeting.su",

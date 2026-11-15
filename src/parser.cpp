@@ -2,6 +2,7 @@
 #include "lexer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <optional>
 #include <set>
@@ -64,7 +65,9 @@ using CustomTypes = std::unordered_map<std::string, CustomTypeDefinition>;
 
 bool is_list_type(Type type);
 bool is_dictionary_type(Type type);
+bool is_tuple_type(Type type);
 Type list_type_for(Type item_type);
+std::vector<Type> tuple_types(Type type, std::size_t line = 0);
 
 bool can_assign(Type expected, Type actual) {
     return expected == actual ||
@@ -181,9 +184,19 @@ bool is_dictionary_type(Type type) {
     return type.kind == Type::Kind::dictionary;
 }
 
+bool is_tuple_type(Type type) {
+    return type.kind == Type::Kind::tuple;
+}
+
 bool is_dict_key_type(Type type) {
     return type == Type::string || type == Type::integer ||
            type == Type::boolean || type == Type::character;
+}
+
+bool is_tuple_scalar_type(Type type) {
+    return type == Type::string || type == Type::number ||
+           type == Type::boolean || type == Type::integer ||
+           type == Type::character;
 }
 
 std::string scalar_type_name(Type type) {
@@ -203,7 +216,7 @@ Type scalar_type_from_name(const std::string& name, std::size_t line) {
     if (name == "bool") return Type::boolean;
     if (name == "int") return Type::integer;
     if (name == "char") return Type::character;
-    throw ParseError(line, "dictionary key and value types must be string, number, bool, int, or char");
+    throw ParseError(line, "expected a scalar type: string, number, bool, int, or char");
 }
 
 std::pair<Type, Type> dictionary_types(Type type) {
@@ -215,8 +228,49 @@ std::pair<Type, Type> dictionary_types(Type type) {
             scalar_type_from_name(type.name.substr(separator + 1), 0)};
 }
 
+std::vector<Type> tuple_types(Type type, std::size_t line) {
+    if (!is_tuple_type(type)) throw std::logic_error("type is not a tuple");
+    std::vector<Type> items;
+    std::size_t start = 0;
+    while (start <= type.name.size()) {
+        const auto comma = type.name.find(',', start);
+        const auto end = comma == std::string::npos ? type.name.size() : comma;
+        items.push_back(scalar_type_from_name(type.name.substr(start, end - start), line));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return items;
+}
+
+Type tuple_type_for(const std::vector<Type>& items, std::size_t line) {
+    if (items.empty()) throw ParseError(line, "tuples must contain at least one value");
+    std::ostringstream name;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        if (!is_tuple_scalar_type(items[i])) {
+            throw ParseError(line, "tuple items must use scalar types");
+        }
+        if (i) name << ',';
+        name << scalar_type_name(items[i]);
+    }
+    return {Type::Kind::tuple, name.str()};
+}
+
 Type parse_type(const std::string& name, std::size_t line, const Types& types) {
     if (const auto custom = types.find(name); custom != types.end()) return custom->second;
+    if (name.rfind("tuple[", 0) == 0 && name.back() == ']') {
+        const auto parameters = name.substr(6, name.size() - 7);
+        std::vector<Type> items;
+        std::size_t start = 0;
+        while (start <= parameters.size()) {
+            const auto comma = parameters.find(',', start);
+            const auto end = comma == std::string::npos ? parameters.size() : comma;
+            items.push_back(scalar_type_from_name(trim(parameters.substr(start, end - start)),
+                                                  line));
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        return tuple_type_for(items, line);
+    }
     if (name.rfind("dict[", 0) == 0 && name.back() == ']') {
         const auto parameters = name.substr(5, name.size() - 6);
         const auto comma = parameters.find(',');
@@ -234,7 +288,7 @@ Type parse_type(const std::string& name, std::size_t line, const Types& types) {
     if (name.rfind("list[", 0) == 0 && name.back() == ']') {
         const auto item = parse_type(name.substr(5, name.size() - 6), line, types);
         if (item.kind == Type::Kind::custom || item == Type::region ||
-            is_dictionary_type(item) ||
+            is_dictionary_type(item) || is_tuple_type(item) ||
             item.kind == Type::Kind::list_number || item.kind == Type::Kind::list_integer ||
             item.kind == Type::Kind::list_string || item.kind == Type::Kind::list_boolean ||
             item.kind == Type::Kind::list_character) {
@@ -249,7 +303,7 @@ Type parse_type(const std::string& name, std::size_t line, const Types& types) {
     if (name == "int") return Type::integer;
     if (name == "char") return Type::character;
     throw ParseError(line, "unknown type '" + name +
-                               "' (use string, number, bool, int, char, region, list[type], or dict[key, value])");
+                               "' (use scalar types, list[type], dict[key, value], or tuple[types])");
 }
 
 bool is_list_type(Type type) {
@@ -311,7 +365,9 @@ std::vector<std::string> split_arguments(const std::string& text, std::size_t li
     if (trim(text).empty()) return result;
 
     std::size_t start = 0;
-    int depth = 0;
+    int parenthesis_depth = 0;
+    int bracket_depth = 0;
+    int brace_depth = 0;
     bool in_string = false;
     bool escaped = false;
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -323,10 +379,19 @@ std::vector<std::string> split_arguments(const std::string& text, std::size_t li
         } else if (c == '"') {
             in_string = true;
         } else if (c == '(') {
-            ++depth;
+            ++parenthesis_depth;
         } else if (c == ')') {
-            if (--depth < 0) throw ParseError(line, "unexpected ')'");
-        } else if (c == ',' && depth == 0) {
+            if (--parenthesis_depth < 0) throw ParseError(line, "unexpected ')'");
+        } else if (c == '[') {
+            ++bracket_depth;
+        } else if (c == ']') {
+            if (--bracket_depth < 0) throw ParseError(line, "unexpected ']'");
+        } else if (c == '{') {
+            ++brace_depth;
+        } else if (c == '}') {
+            if (--brace_depth < 0) throw ParseError(line, "unexpected '}'");
+        } else if (c == ',' && parenthesis_depth == 0 &&
+                   bracket_depth == 0 && brace_depth == 0) {
             const auto part = trim(text.substr(start, i - start));
             if (part.empty()) throw ParseError(line, "empty argument");
             result.push_back(part);
@@ -334,7 +399,9 @@ std::vector<std::string> split_arguments(const std::string& text, std::size_t li
         }
     }
     if (in_string) throw ParseError(line, "unterminated string literal");
-    if (depth != 0) throw ParseError(line, "unclosed '(' in argument list");
+    if (parenthesis_depth != 0 || bracket_depth != 0 || brace_depth != 0) {
+        throw ParseError(line, "unclosed delimiter in argument list");
+    }
     const auto last = trim(text.substr(start));
     if (last.empty()) throw ParseError(line, "empty argument");
     result.push_back(last);
@@ -514,10 +581,34 @@ private:
 
     ExprValue parse_primary() {
         if (accept("(")) {
-            auto value = parse_binary(1);
-            if (!accept(")")) throw ParseError(line_, "expected ')' after expression");
-            value.plain_string.reset();
-            return parse_postfix(std::move(value));
+            auto first = parse_binary(1);
+            if (!accept(",")) {
+                if (!accept(")")) throw ParseError(line_, "expected ')' after expression");
+                first.plain_string.reset();
+                return parse_postfix(std::move(first));
+            }
+            std::vector<ExprValue> values{std::move(first)};
+            if (!accept(")")) {
+                do {
+                    values.push_back(parse_binary(1));
+                } while (accept(",") && peek().text != ")");
+                if (!accept(")")) throw ParseError(line_, "expected ')' after tuple items");
+            }
+            std::vector<Type> item_types;
+            std::vector<Expression> items;
+            std::ostringstream construction;
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                item_types.push_back(values[i].type);
+                items.push_back(values[i].ast);
+                if (i) construction << ", ";
+                construction << values[i].cpp;
+            }
+            const auto type = tuple_type_for(item_types, line_);
+            const auto cpp_tuple_type = cpp_type(type);
+            return parse_postfix(make_expr_value(
+                type, cpp_tuple_type + '{' + construction.str() + '}',
+                make_expression(Expression::Kind::aggregate, type, cpp_tuple_type,
+                                std::move(items))));
         }
         if (accept("[")) {
             std::vector<ExprValue> values;
@@ -534,6 +625,7 @@ private:
             }
             const auto item_type = values.front().type;
             if (is_list_type(item_type) || item_type == Type::region ||
+                is_tuple_type(item_type) ||
                 item_type == Type::empty_list) {
                 throw ParseError(line_, "lists cannot contain regions or nested lists");
             }
@@ -568,7 +660,7 @@ private:
                     }
                     if (value.type.kind == Type::Kind::custom ||
                         value.type == Type::region || is_list_type(value.type) ||
-                        is_dictionary_type(value.type) ||
+                        is_dictionary_type(value.type) || is_tuple_type(value.type) ||
                         value.type == Type::empty_list ||
                         value.type == Type::empty_dictionary) {
                         throw ParseError(line_, "dictionary values must have a supported scalar type");
@@ -853,11 +945,50 @@ private:
     ExprValue parse_postfix(ExprValue value) {
         while (true) {
             if (accept("[")) {
-                if (!is_list_type(value.type) && !is_dictionary_type(value.type)) {
-                    throw ParseError(line_, "only lists and dictionaries can be indexed");
+                if (!is_list_type(value.type) && !is_dictionary_type(value.type) &&
+                    !is_tuple_type(value.type)) {
+                    throw ParseError(line_, "only lists, dictionaries, and tuples can be indexed");
                 }
                 const auto index = parse_binary(1);
                 if (!accept("]")) throw ParseError(line_, "expected ']' after index");
+                if (is_tuple_type(value.type)) {
+                    const auto items = tuple_types(value.type, line_);
+                    std::string index_text;
+                    if (index.type == Type::number &&
+                        index.ast.kind == Expression::Kind::literal) {
+                        index_text = index.ast.value;
+                    } else if (index.type == Type::integer &&
+                               index.ast.kind == Expression::Kind::call &&
+                               index.ast.value == "sun_to_int" &&
+                               index.ast.children.size() == 1 &&
+                               index.ast.children.front().kind == Expression::Kind::literal) {
+                        index_text = index.ast.children.front().value;
+                    } else {
+                        throw ParseError(line_,
+                                         "tuple index must be a non-negative integer literal");
+                    }
+                    double numeric_index = 0.0;
+                    try {
+                        numeric_index = std::stod(index_text);
+                    } catch (const std::invalid_argument&) {
+                        throw ParseError(line_, "invalid tuple index");
+                    } catch (const std::out_of_range&) {
+                        throw ParseError(line_, "tuple index is out of bounds");
+                    }
+                    if (!std::isfinite(numeric_index) || numeric_index < 0 ||
+                        std::floor(numeric_index) != numeric_index ||
+                        numeric_index >= static_cast<double>(items.size())) {
+                        throw ParseError(line_, "tuple index is out of bounds");
+                    }
+                    const auto item_index = static_cast<std::size_t>(numeric_index);
+                    const auto item_type = items[item_index];
+                    const auto helper = "std::get<" + std::to_string(item_index) + ">";
+                    value = make_expr_value(
+                        item_type, helper + "(" + value.cpp + ")",
+                        make_expression(Expression::Kind::call, item_type, helper,
+                                        {value.ast}));
+                    continue;
+                }
                 if (is_dictionary_type(value.type)) {
                     const auto types = dictionary_types(value.type);
                     if (index.type != types.first) {
@@ -886,7 +1017,9 @@ private:
                     throw ParseError(line_, "expected a dictionary operation after '.'");
                 }
                 const auto operation = take().text;
-                if (operation != "contains" && operation != "remove") {
+                if (operation != "contains" && operation != "remove" &&
+                    operation != "keys" && operation != "values" &&
+                    operation != "get") {
                     throw ParseError(line_, "unknown dictionary operation '" + operation + "'");
                 }
                 if (!accept("(")) {
@@ -896,24 +1029,116 @@ private:
                     throw ParseError(line_, "default values cannot call functions");
                 }
                 const auto arguments = parse_expression_arguments();
-                if (arguments.size() != 1) {
-                    throw ParseError(line_, "dictionary." + operation +
-                                                " expects one key argument");
+                const auto [key_type, value_type] = dictionary_types(value.type);
+                std::string helper;
+                Type result_type = Type::boolean;
+                std::vector<Expression> helper_arguments{value.ast};
+                std::ostringstream code;
+                if (operation == "keys" || operation == "values") {
+                    if (!arguments.empty()) {
+                        throw ParseError(line_, "dictionary." + operation +
+                                                    " expects no arguments");
+                    }
+                    helper = operation == "keys" ? "sun_dict_keys" : "sun_dict_values";
+                    result_type = list_type_for(operation == "keys" ? key_type : value_type);
+                    code << helper << '(' << value.cpp << ')';
+                } else if (operation == "get") {
+                    if (arguments.size() != 2) {
+                        throw ParseError(line_, "dictionary.get expects a key and default value");
+                    }
+                    if (arguments[0].type != key_type) {
+                        throw ParseError(line_, "dictionary key must have type " +
+                                                    cpp_type(key_type));
+                    }
+                    if (!can_assign(value_type, arguments[1].type)) {
+                        throw ParseError(line_, "dictionary default value must have type " +
+                                                    cpp_type(value_type));
+                    }
+                    helper = "sun_dict_get";
+                    result_type = value_type;
+                    const auto converted = converted_expression(
+                        value_type, arguments[1].type, arguments[1].ast);
+                    code << helper << '(' << value.cpp << ", " << arguments[0].cpp
+                         << ", " << converted_value(value_type, arguments[1].type,
+                                                    arguments[1].cpp) << ')';
+                    helper_arguments.push_back(arguments[0].ast);
+                    helper_arguments.push_back(converted);
+                } else {
+                    if (arguments.size() != 1) {
+                        throw ParseError(line_, "dictionary." + operation +
+                                                    " expects one key argument");
+                    }
+                    if (arguments.front().type != key_type) {
+                        throw ParseError(line_, "dictionary key must have type " +
+                                                    cpp_type(key_type));
+                    }
+                    helper = operation == "contains"
+                                 ? "sun_dict_contains"
+                                 : "sun_dict_remove";
+                    code << helper << '(' << value.cpp << ", "
+                         << arguments.front().cpp << ')';
+                    helper_arguments.push_back(arguments.front().ast);
                 }
-                const auto key_type = dictionary_types(value.type).first;
-                if (arguments.front().type != key_type) {
-                    throw ParseError(line_, "dictionary key must have type " +
-                                                cpp_type(key_type));
-                }
-                const std::string helper = operation == "contains"
-                                               ? "sun_dict_contains"
-                                               : "sun_dict_remove";
-                const auto code = helper + "(" + value.cpp + ", " +
-                                  arguments.front().cpp + ")";
                 value = make_expr_value(
-                    Type::boolean, code,
-                    make_expression(Expression::Kind::call, Type::boolean, helper,
-                                    {value.ast, arguments.front().ast}));
+                    result_type, code.str(),
+                    make_expression(Expression::Kind::call, result_type, helper,
+                                    std::move(helper_arguments)));
+                continue;
+            }
+            if (is_list_type(value.type)) {
+                if (peek().kind != Token::Kind::identifier) {
+                    throw ParseError(line_, "expected a list operation after '.'");
+                }
+                const auto operation = take().text;
+                if (operation != "contains" && operation != "remove" &&
+                    operation != "pop") {
+                    throw ParseError(line_, "unknown list operation '" + operation + "'");
+                }
+                if (!accept("(")) {
+                    throw ParseError(line_, "list operations require parentheses");
+                }
+                if (!allow_function_calls_) {
+                    throw ParseError(line_, "default values cannot call functions");
+                }
+                const auto arguments = parse_expression_arguments();
+                const auto item_type = list_item_type(value.type);
+                std::string helper;
+                Type result_type = Type::boolean;
+                std::vector<Expression> helper_arguments{value.ast};
+                std::ostringstream code;
+                if (operation == "pop") {
+                    if (arguments.size() != 1 ||
+                        (arguments[0].type != Type::integer &&
+                         arguments[0].type != Type::number)) {
+                        throw ParseError(line_, "list.pop expects one int or number index");
+                    }
+                    helper = "sun_list_pop";
+                    result_type = item_type;
+                    code << helper << '(' << value.cpp << ", "
+                         << as_number(arguments[0]) << ')';
+                    helper_arguments.push_back(as_number_expression(arguments[0]));
+                } else {
+                    if (arguments.size() != 1) {
+                        throw ParseError(line_, "list." + operation +
+                                                    " expects one item argument");
+                    }
+                    if (!can_assign(item_type, arguments[0].type)) {
+                        throw ParseError(line_, "list item must have type " +
+                                                    cpp_type(item_type));
+                    }
+                    helper = operation == "contains"
+                                 ? "sun_list_contains"
+                                 : "sun_list_remove";
+                    code << helper << '(' << value.cpp << ", "
+                         << converted_value(item_type, arguments[0].type,
+                                            arguments[0].cpp) << ')';
+                    helper_arguments.push_back(converted_expression(
+                        item_type, arguments[0].type, arguments[0].ast));
+                }
+                value = make_expr_value(
+                    result_type, code.str(),
+                    make_expression(Expression::Kind::call, result_type, helper,
+                                    std::move(helper_arguments)));
                 continue;
             }
             if (value.type.kind != Type::Kind::custom) {
@@ -1113,9 +1338,27 @@ private:
             throw ParseError(line_, "istype expects a value and a type, e.g. istype(x, number)");
         }
         if (peek().kind != Token::Kind::identifier) {
-            throw ParseError(line_, "istype type must be string, number, bool, int, char, or region");
+            throw ParseError(line_, "istype type must be a scalar type, list, dict, tuple, or region");
         }
-        const auto target_type = parse_type(take().text, line_, types_);
+        const auto target_name = take().text;
+        if (target_name == "list" || target_name == "dict" ||
+            target_name == "tuple") {
+            if (!accept(")")) {
+                throw ParseError(line_, "expected ')' after istype arguments");
+            }
+            const bool matches =
+                target_name == "list"
+                    ? is_list_type(value.type) || value.type == Type::empty_list
+                    : target_name == "dict"
+                          ? is_dictionary_type(value.type) ||
+                                value.type == Type::empty_dictionary
+                          : is_tuple_type(value.type);
+            const auto result = matches ? "true" : "false";
+            return make_expr_value(
+                Type::boolean, result,
+                make_expression(Expression::Kind::literal, Type::boolean, result));
+        }
+        const auto target_type = parse_type(target_name, line_, types_);
         if (target_type == Type::region && !memory_imported_) {
             throw ParseError(line_, "the region type requires 'import memory'");
         }
@@ -1779,7 +2022,7 @@ private:
                             }
                             if (field_type.kind == Type::Kind::custom ||
                                 field_type == Type::region || is_list_type(field_type) ||
-                                is_dictionary_type(field_type)) {
+                                is_dictionary_type(field_type) || is_tuple_type(field_type)) {
                                 throw ParseError(line.number,
                                                  "enum payload fields must have scalar types");
                             }
@@ -1803,7 +2046,7 @@ private:
                                                    line.number, types_);
                 if (field_type.kind == Type::Kind::custom ||
                     field_type == Type::region || field_type == Type::empty_list ||
-                    is_dictionary_type(field_type)) {
+                    is_dictionary_type(field_type) || is_tuple_type(field_type)) {
                     throw ParseError(line.number, "unsupported field type");
                 }
                 definition.fields.push_back({field_name, field_type});
@@ -2936,18 +3179,31 @@ private:
         const auto object = expression(trim(text.substr(0, dot)), line.number,
                                        symbols, math_imported);
         const auto method = trim(text.substr(dot + 1, open - dot - 1));
+        if (!is_identifier(method)) {
+            throw ParseError(line.number, "invalid collection operation");
+        }
+        const auto numeric_value = [](const ExprValue& value) {
+            return value.type == Type::integer
+                       ? "static_cast<double>(" + value.cpp + ")"
+                       : value.cpp;
+        };
         if (is_dictionary_type(object.type)) {
-            if (method != "remove") {
-                throw ParseError(line.number, "dictionary." + method +
-                                                 " returns bool; use it in an expression");
-            }
             const auto call = parse_call(method + text.substr(open), line.number);
             const auto arguments = split_arguments(call.second, line.number);
+            if (method == "clear") {
+                if (!arguments.empty()) {
+                    throw ParseError(line.number, "dictionary.clear expects no arguments");
+                }
+                return "(" + object.cpp + ").clear();";
+            }
+            if (method != "remove") {
+                throw ParseError(line.number, "dictionary." + method +
+                                                 " returns a value; use it in an expression");
+            }
             if (arguments.size() != 1) {
                 throw ParseError(line.number, "dictionary.remove expects one key argument");
             }
-            const auto key = expression(arguments.front(), line.number, symbols,
-                                         math_imported);
+            const auto key = expression(arguments.front(), line.number, symbols, math_imported);
             const auto key_type = dictionary_types(object.type).first;
             if (key.type != key_type) {
                 throw ParseError(line.number, "dictionary key must have type " +
@@ -2955,11 +3211,61 @@ private:
             }
             return "sun_dict_remove(" + object.cpp + ", " + key.cpp + ");";
         }
+        if (is_list_type(object.type)) {
+            const auto call = parse_call(method + text.substr(open), line.number);
+            const auto arguments = split_arguments(call.second, line.number);
+            const auto item_type = list_item_type(object.type);
+            if (method == "clear") {
+                if (!arguments.empty()) {
+                    throw ParseError(line.number, "list.clear expects no arguments");
+                }
+                return "(" + object.cpp + ").clear();";
+            }
+            if (method == "insert") {
+                if (arguments.size() != 2) {
+                    throw ParseError(line.number, "list.insert expects an index and item");
+                }
+                const auto index = expression(arguments[0], line.number, symbols, math_imported);
+                const auto item = expression(arguments[1], line.number, symbols, math_imported);
+                if (index.type != Type::integer && index.type != Type::number) {
+                    throw ParseError(line.number, "list.insert index must have type int or number");
+                }
+                if (!can_assign(item_type, item.type)) {
+                    throw ParseError(line.number, "list item must have type " +
+                                                     cpp_type(item_type));
+                }
+                return "sun_list_insert(" + object.cpp + ", " + numeric_value(index) + ", " +
+                       converted_value(item_type, item.type, item.cpp) + ");";
+            }
+            if (method == "remove") {
+                if (arguments.size() != 1) {
+                    throw ParseError(line.number, "list.remove expects one item");
+                }
+                const auto item = expression(arguments.front(), line.number, symbols,
+                                             math_imported);
+                if (!can_assign(item_type, item.type)) {
+                    throw ParseError(line.number, "list item must have type " +
+                                                     cpp_type(item_type));
+                }
+                return "sun_list_remove(" + object.cpp + ", " +
+                       converted_value(item_type, item.type, item.cpp) + ");";
+            }
+            if (method == "pop") {
+                if (arguments.size() != 1) {
+                    throw ParseError(line.number, "list.pop expects one index");
+                }
+                const auto index = expression(arguments.front(), line.number, symbols,
+                                              math_imported);
+                if (index.type != Type::integer && index.type != Type::number) {
+                    throw ParseError(line.number, "list.pop index must have type int or number");
+                }
+                return "sun_list_pop(" + object.cpp + ", " + numeric_value(index) + ");";
+            }
+            throw ParseError(line.number, "list." + method +
+                                             " returns a value or is not supported as a statement");
+        }
         if (object.type.kind != Type::Kind::custom) {
             throw ParseError(line.number, "method call requires a class or struct value");
-        }
-        if (!is_identifier(method)) {
-            throw ParseError(line.number, "invalid method name");
         }
         const auto call = parse_call(method + text.substr(open), line.number);
         const auto signature = signatures_.find(object.type.name + "." + method);
@@ -3143,7 +3449,8 @@ private:
             ? symbols.end() : symbols.find(trim(text.substr(0, method_dot)));
         if (method_object != symbols.end() &&
             (method_object->second.type.kind == Type::Kind::custom ||
-             is_dictionary_type(method_object->second.type)) &&
+             is_dictionary_type(method_object->second.type) ||
+             is_list_type(method_object->second.type)) &&
             text.find('(', method_dot) != std::string::npos) {
             auto result = parse_method_statement(line, text, symbols, math_imported);
             ++index;
@@ -3193,6 +3500,17 @@ std::string cpp_type(Type type) {
         return "std::map<" + cpp_type(types.first) + ", " + cpp_type(types.second) + ">";
     }
     case Type::Kind::empty_dictionary: return "std::map<int, int>";
+    case Type::Kind::tuple: {
+        std::ostringstream result;
+        result << "std::tuple<";
+        const auto items = tuple_types(type);
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (i) result << ", ";
+            result << cpp_type(items[i]);
+        }
+        result << '>';
+        return result.str();
+    }
     case Type::Kind::custom: break;
     }
     throw std::logic_error("invalid Sun type");

@@ -254,10 +254,10 @@ std::string render_block(const Block& statements, std::size_t spaces) {
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <limits>\n"
+    out << "#include <algorithm>\n#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <limits>\n"
            "#include <map>\n#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <functional>\n#include <string>\n#include <type_traits>\n#include <utility>\n"
-           "#include <variant>\n#include <vector>\n";
+           "#include <tuple>\n#include <variant>\n#include <vector>\n";
     if (program.io_imported) {
         out << "#include <filesystem>\n#include <fstream>\n#include <iterator>\n";
     }
@@ -282,6 +282,29 @@ bool sun_dict_contains(const Map& values, const Key& key) {
 template <typename Map, typename Key>
 bool sun_dict_remove(Map& values, const Key& key) {
     return values.erase(key) != 0;
+}
+
+template <typename Map>
+std::vector<typename Map::key_type> sun_dict_keys(const Map& values) {
+    std::vector<typename Map::key_type> keys;
+    keys.reserve(values.size());
+    for (const auto& entry : values) keys.push_back(entry.first);
+    return keys;
+}
+
+template <typename Map>
+std::vector<typename Map::mapped_type> sun_dict_values(const Map& values) {
+    std::vector<typename Map::mapped_type> items;
+    items.reserve(values.size());
+    for (const auto& entry : values) items.push_back(entry.second);
+    return items;
+}
+
+template <typename Map, typename Key>
+typename Map::mapped_type sun_dict_get(
+    const Map& values, const Key& key, typename Map::mapped_type fallback) {
+    const auto found = values.find(key);
+    return found == values.end() ? std::move(fallback) : found->second;
 }
 
 std::string sun_input_string(const std::string& prompt) {
@@ -423,6 +446,41 @@ template <typename T>
 void sun_list_append(std::vector<T>& values, T value) {
     values.push_back(std::move(value));
 }
+
+template <typename T>
+bool sun_list_contains(const std::vector<T>& values, const T& value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+template <typename T>
+bool sun_list_remove(std::vector<T>& values, const T& value) {
+    const auto found = std::find(values.begin(), values.end(), value);
+    if (found == values.end()) return false;
+    values.erase(found);
+    return true;
+}
+
+template <typename T>
+void sun_list_insert(std::vector<T>& values, double index, T value) {
+    if (!std::isfinite(index) || index < 0.0 || std::floor(index) != index ||
+        index > static_cast<double>(values.size())) {
+        throw SunRuntimeError("list insertion index out of bounds or not a non-negative integer");
+    }
+    values.insert(values.begin() + static_cast<std::ptrdiff_t>(index),
+                  std::move(value));
+}
+
+template <typename T>
+T sun_list_pop(std::vector<T>& values, double index) {
+    if (!std::isfinite(index) || index < 0.0 || std::floor(index) != index ||
+        index >= static_cast<double>(values.size())) {
+        throw SunRuntimeError("list pop index out of bounds or not a non-negative integer");
+    }
+    const auto offset = static_cast<std::size_t>(index);
+    T value = values[offset];
+    values.erase(values.begin() + static_cast<std::ptrdiff_t>(offset));
+    return value;
+}
 )cpp";
     if (program.io_imported) out << io_runtime_cpp();
     if (program.memory_imported) {
@@ -562,6 +620,22 @@ private:
            "    std::ostringstream stream;\n"
            "    stream << std::boolalpha << value;\n"
            "    return stream.str();\n"
+           "}\n\n"
+           "template <typename Tuple, std::size_t... Indices>\n"
+           "std::string sun_tuple_to_string_impl(const Tuple& value, "
+           "std::index_sequence<Indices...>) {\n"
+           "    std::ostringstream stream;\n"
+           "    stream << '(';\n"
+           "    std::size_t index = 0;\n"
+           "    ((stream << (index++ ? \", \" : \"\") << "
+           "sun_to_string(std::get<Indices>(value))), ...);\n"
+           "    if constexpr (sizeof...(Indices) == 1) stream << ',';\n"
+           "    stream << ')';\n"
+           "    return stream.str();\n"
+           "}\n\n"
+           "template <typename... Types>\n"
+           "std::string sun_to_string(const std::tuple<Types...>& value) {\n"
+           "    return sun_tuple_to_string_impl(value, std::index_sequence_for<Types...>{});\n"
            "}\n\n"
            "template <typename T>\n"
            "std::string sun_to_string(const std::vector<T>& values) {\n"

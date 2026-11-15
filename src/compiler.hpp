@@ -27,6 +27,7 @@ struct Type {
         empty_list,
         dictionary,
         empty_dictionary,
+        tuple,
         custom
     };
 

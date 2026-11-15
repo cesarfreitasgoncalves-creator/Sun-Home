@@ -16,13 +16,15 @@ em [HOWUSE.md](HOWUSE.md).
 
 ## Recursos atuais
 
-- Funcoes com parametros tipados (`string`, `number`, `bool`) e blocos `end`.
+- Funcoes com parametros tipados (`string`, `number`, `bool`, `region`) e blocos `end`.
 - Chamadas de funcao e `print(...)`.
 - Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
+- `import memory` com regioes de bytes gerenciadas, limites de alocacao e
+  verificacao de bounds para leitura e escrita.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como

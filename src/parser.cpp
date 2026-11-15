@@ -116,7 +116,9 @@ Type parse_type(const std::string& name, std::size_t line) {
     if (name == "string") return Type::string;
     if (name == "number") return Type::number;
     if (name == "bool") return Type::boolean;
-    throw ParseError(line, "unknown type '" + name + "' (use string, number, or bool)");
+    if (name == "region") return Type::region;
+    throw ParseError(line, "unknown type '" + name +
+                               "' (use string, number, bool, or region)");
 }
 
 std::size_t find_assignment_operator(const std::string& text) {
@@ -265,10 +267,12 @@ std::string cpp_string(const std::string& value) {
 class ExpressionParser {
 public:
     ExpressionParser(const std::string& source, std::size_t line, const Symbols& symbols,
-                     bool math_imported, const Signatures& signatures,
+                     bool math_imported, bool memory_imported,
+                     const Signatures& signatures,
                      bool allow_function_calls = true)
         : tokens_(tokenize(source, line)), line_(line), symbols_(symbols),
-          math_imported_(math_imported), signatures_(signatures),
+          math_imported_(math_imported), memory_imported_(memory_imported),
+          signatures_(signatures),
           allow_function_calls_(allow_function_calls) {}
 
     ExprValue parse() {
@@ -371,6 +375,16 @@ private:
                 }
                 return parse_math_call(name);
             }
+            if (name == "memory" && accept(".")) {
+                if (peek().kind != Token::Kind::identifier) {
+                    throw ParseError(line_, "expected a memory function after 'memory.'");
+                }
+                name = take().text;
+                if (!accept("(")) {
+                    throw ParseError(line_, "expected '(' after memory function name");
+                }
+                return parse_memory_call(name);
+            }
             if (name == "istype" && accept("(")) return parse_istype_call();
             if (accept("(")) {
                 const auto signature = signatures_.find(name);
@@ -429,12 +443,58 @@ private:
             throw ParseError(line_, "istype expects a value and a type, e.g. istype(x, number)");
         }
         if (peek().kind != Token::Kind::identifier) {
-            throw ParseError(line_, "istype type must be string, number, or bool");
+            throw ParseError(line_, "istype type must be string, number, bool, or region");
         }
         const auto target_type = parse_type(take().text, line_);
+        if (target_type == Type::region && !memory_imported_) {
+            throw ParseError(line_, "the region type requires 'import memory'");
+        }
         if (!accept(")")) throw ParseError(line_, "expected ')' after istype arguments");
         const bool matches = value.type == target_type;
         return {Type::boolean, matches ? "true" : "false", std::nullopt};
+    }
+
+    ExprValue parse_memory_call(const std::string& name) {
+        if (!memory_imported_) throw ParseError(line_, "memory functions require 'import memory'");
+        if (!allow_function_calls_) {
+            throw ParseError(line_, "default values cannot call functions");
+        }
+        if (name == "write_u8") {
+            throw ParseError(line_, "memory.write_u8 is a statement, not an expression");
+        }
+        std::vector<ExprValue> arguments;
+        if (!accept(")")) {
+            do {
+                arguments.push_back(parse_binary(1));
+            } while (accept(","));
+            if (!accept(")")) throw ParseError(line_, "expected ')' after memory arguments");
+        }
+        if (name == "alloc") {
+            if (arguments.size() != 1) {
+                throw ParseError(line_, "memory.alloc expects 1 argument");
+            }
+            if (arguments[0].type != Type::number) {
+                throw ParseError(line_, "memory.alloc size must have type number");
+            }
+            return {Type::region, "SunMemoryRegion::allocate(" + arguments[0].cpp + ")",
+                    std::nullopt};
+        }
+        if (name == "size") {
+            if (arguments.size() != 1 || arguments[0].type != Type::region) {
+                throw ParseError(line_, "memory.size expects one region argument");
+            }
+            return {Type::number, "(" + arguments[0].cpp + ").size()", std::nullopt};
+        }
+        if (name == "read_u8") {
+            if (arguments.size() != 2 || arguments[0].type != Type::region ||
+                arguments[1].type != Type::number) {
+                throw ParseError(line_, "memory.read_u8 expects (region, number offset)");
+            }
+            return {Type::number, "(" + arguments[0].cpp + ").read_u8(" +
+                                     arguments[1].cpp + ")",
+                    std::nullopt};
+        }
+        throw ParseError(line_, "unknown memory function '" + name + "'");
     }
 
     ExprValue parse_fstring(const std::string& text) {
@@ -464,6 +524,9 @@ private:
                 const auto found = symbols_.find(name);
                 if (found == symbols_.end()) {
                     throw ParseError(line_, "unknown value '" + name + "'");
+                }
+                if (found->second.type == Type::region) {
+                    throw ParseError(line_, "memory regions cannot be interpolated as text");
                 }
                 parts.push_back("sun_to_string(" + found->second.cpp_name + ")");
                 i = close + 1;
@@ -556,6 +619,9 @@ private:
             if (left.type != right.type) {
                 throw ParseError(line_, "equality comparison requires values of the same type");
             }
+            if (left.type == Type::region) {
+                throw ParseError(line_, "memory regions cannot be compared directly");
+            }
             return {Type::boolean, "((" + left.cpp + ") " + op + " (" + right.cpp + "))",
                     std::nullopt};
         }
@@ -582,6 +648,7 @@ private:
     std::size_t line_;
     const Symbols& symbols_;
     bool math_imported_;
+    bool memory_imported_;
     const Signatures& signatures_;
     bool allow_function_calls_;
 };
@@ -615,18 +682,27 @@ public:
     Program parse() {
         Program result;
         std::size_t index = 0;
+        bool seen_math = false;
+        bool seen_memory = false;
         skip_ignored(index);
         while (index < lines_.size() && starts_word(lines_[index].text, "import")) {
-            if (lines_[index].text != "import math") {
-                throw ParseError(lines_[index].number, "only 'import math' is currently supported");
+            const auto module = trim(lines_[index].text.substr(6));
+            if (module == "math") {
+                if (seen_math) throw ParseError(lines_[index].number, "duplicate import 'math'");
+                seen_math = true;
+                result.math_imported = true;
+            } else if (module == "memory") {
+                if (seen_memory) throw ParseError(lines_[index].number, "duplicate import 'memory'");
+                seen_memory = true;
+                result.memory_imported = true;
+            } else {
+                throw ParseError(lines_[index].number,
+                                 "supported imports are 'math' and 'memory'");
             }
-            if (result.math_imported) {
-                throw ParseError(lines_[index].number, "duplicate import 'math'");
-            }
-            result.math_imported = true;
             ++index;
             skip_ignored(index);
         }
+        memory_imported_ = result.memory_imported;
         for (std::size_t i = index; i < lines_.size(); ++i) {
             if (is_ignored(lines_[i])) continue;
             if (lines_[i].text == "inline cpp:") {
@@ -677,6 +753,7 @@ public:
                 if (!parameter.default_value) continue;
                 const auto value = ExpressionParser(*parameter.default_value, line.number,
                                                     no_symbols, result.math_imported,
+                                                    result.memory_imported,
                                                     signatures_, false).parse();
                 if (value.type != parameter.type) {
                     throw ParseError(line.number, "default for parameter '" + parameter.name +
@@ -748,6 +825,9 @@ private:
                 throw ParseError(line.number, "return type must follow ':' (e.g. ': number')");
             }
             return_type = parse_type(trim(return_annotation.substr(1)), line.number);
+            if (*return_type == Type::region && !memory_imported_) {
+                throw ParseError(line.number, "the region type requires 'import memory'");
+            }
         }
         Function function;
         function.name = call.first;
@@ -769,6 +849,9 @@ private:
             const auto type = colon == std::string::npos
                                   ? Type::string
                                   : parse_type(trim(declaration.substr(colon + 1)), line.number);
+            if (type == Type::region && !memory_imported_) {
+                throw ParseError(line.number, "the region type requires 'import memory'");
+            }
             std::optional<std::string> default_value;
             if (equals != std::string::npos) {
                 const auto source = trim(parameter_text.substr(equals + 1));
@@ -874,7 +957,8 @@ private:
 
     ExprValue expression(const std::string& text, std::size_t line, const Symbols& symbols,
                          bool math_imported) const {
-        return ExpressionParser(text, line, symbols, math_imported, signatures_).parse();
+        return ExpressionParser(text, line, symbols, math_imported, memory_imported_,
+                                signatures_).parse();
     }
 
     ExprValue parse_condition(const SourceLine& line, const std::string& keyword,
@@ -1048,6 +1132,9 @@ private:
             throw ParseError(line.number, "value '" + name + "' is already declared in this scope");
         }
         const auto type = parse_type(trim(typed_name.substr(colon + 1)), line.number);
+        if (type == Type::region && !memory_imported_) {
+            throw ParseError(line.number, "the region type requires 'import memory'");
+        }
         const auto value = expression(trim(declaration.substr(equals + 1)), line.number,
                                       symbols, math_imported);
         if (value.type != type) {
@@ -1106,6 +1193,9 @@ private:
         const auto arguments = split_arguments(arguments_text, line.number);
         if (arguments.empty()) throw ParseError(line.number, "expected print(expression)");
         const auto first = expression(arguments.front(), line.number, symbols, math_imported);
+        if (first.type == Type::region) {
+            throw ParseError(line.number, "memory regions cannot be printed directly");
+        }
         ExprValue value = first;
         if (arguments.size() > 1 ||
             (first.plain_string && first.plain_string->find("%v") != std::string::npos)) {
@@ -1120,6 +1210,9 @@ private:
                 }
                 values.push_back(expression(trim(arguments[i].substr(equals + 1)),
                                             line.number, symbols, math_imported));
+                if (values.back().type == Type::region) {
+                    throw ParseError(line.number, "memory regions cannot be formatted as text");
+                }
             }
             std::vector<std::string> parts;
             std::string literal;
@@ -1165,6 +1258,30 @@ private:
             value = {Type::string, formatted.str(), std::nullopt};
         }
         return "std::cout << sun_to_string(" + value.cpp + ") << '\\n';";
+    }
+
+    std::string parse_memory_statement(const SourceLine& line, const std::string& text,
+                                      const Symbols& symbols, bool math_imported) const {
+        if (!memory_imported_) {
+            throw ParseError(line.number, "memory functions require 'import memory'");
+        }
+        const auto call = parse_call(text.substr(7), line.number);
+        if (call.first != "write_u8") {
+            throw ParseError(line.number, "only memory.write_u8 is a standalone memory statement");
+        }
+        const auto arguments = split_arguments(call.second, line.number);
+        if (arguments.size() != 3) {
+            throw ParseError(line.number, "memory.write_u8 expects (region, offset, value)");
+        }
+        const auto region = expression(arguments[0], line.number, symbols, math_imported);
+        const auto offset = expression(arguments[1], line.number, symbols, math_imported);
+        const auto value = expression(arguments[2], line.number, symbols, math_imported);
+        if (region.type != Type::region || offset.type != Type::number ||
+            value.type != Type::number) {
+            throw ParseError(line.number,
+                             "memory.write_u8 expects (region, number offset, number value)");
+        }
+        return "(" + region.cpp + ").write_u8(" + offset.cpp + ", " + value.cpp + ");";
     }
 
     std::string parse_user_call(const SourceLine& line, const std::string& text,
@@ -1253,6 +1370,11 @@ private:
             ++index;
             return text + ";";
         }
+        if (text.rfind("memory.", 0) == 0) {
+            auto result = parse_memory_statement(line, text, symbols, math_imported);
+            ++index;
+            return result;
+        }
         if (is_assignment(text)) {
             auto result = parse_assignment(line, symbols, math_imported);
             ++index;
@@ -1279,6 +1401,7 @@ private:
     bool inside_function_ = false;
     std::size_t next_loop_id_ = 0;
     std::size_t loop_depth_ = 0;
+    bool memory_imported_ = false;
 };
 
 } // namespace
@@ -1288,6 +1411,7 @@ std::string cpp_type(Type type) {
     case Type::string: return "std::string";
     case Type::number: return "double";
     case Type::boolean: return "bool";
+    case Type::region: return "SunMemoryRegion";
     }
     throw std::logic_error("invalid Sun type");
 }

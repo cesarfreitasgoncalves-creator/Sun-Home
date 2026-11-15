@@ -9,7 +9,7 @@
 
 namespace sun {
 
-enum class Type { string, number, boolean };
+enum class Type { string, number, boolean, region };
 
 struct ParseError : std::runtime_error {
     ParseError(std::size_t line, const std::string& message)
@@ -36,6 +36,7 @@ struct Program {
     std::vector<std::string> main_body;
     std::vector<std::string> global_cpp;
     bool math_imported = false;
+    bool memory_imported = false;
 };
 
 Program parse(std::istream& source);

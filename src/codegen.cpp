@@ -23,7 +23,60 @@ std::string indent_statements(const std::vector<std::string>& statements, std::s
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <iostream>\n#include <sstream>\n#include <stdexcept>\n#include <string>\n";
+    out << "#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <sstream>\n"
+           "#include <stdexcept>\n#include <string>\n";
+    if (program.memory_imported) {
+        out << "#include <memory>\n#include <utility>\n#include <vector>\n";
+        out << R"cpp(
+class SunMemoryRegion {
+public:
+    static SunMemoryRegion allocate(double requested_size) {
+        if (!std::isfinite(requested_size) || requested_size < 0.0 ||
+            std::floor(requested_size) != requested_size ||
+            requested_size > static_cast<double>(max_region_size)) {
+            throw std::runtime_error("memory.alloc size must be an integer from 0 to 67108864");
+        }
+        return SunMemoryRegion(
+            std::make_shared<std::vector<std::uint8_t>>(
+                static_cast<std::size_t>(requested_size), 0));
+    }
+
+    double size() const {
+        return static_cast<double>(bytes_->size());
+    }
+
+    double read_u8(double offset) const {
+        return static_cast<double>((*bytes_)[checked_offset(offset)]);
+    }
+
+    void write_u8(double offset, double value) {
+        if (!std::isfinite(value) || value < 0.0 || value > 255.0 ||
+            std::floor(value) != value) {
+            throw std::runtime_error("memory.write_u8 value must be an integer from 0 to 255");
+        }
+        (*bytes_)[checked_offset(offset)] = static_cast<std::uint8_t>(value);
+    }
+
+private:
+    static constexpr std::size_t max_region_size = 64 * 1024 * 1024;
+
+    explicit SunMemoryRegion(std::shared_ptr<std::vector<std::uint8_t>> bytes)
+        : bytes_(std::move(bytes)) {}
+
+    std::size_t checked_offset(double offset) const {
+        if (!std::isfinite(offset) || offset < 0.0 || std::floor(offset) != offset) {
+            throw std::runtime_error("memory offset must be a non-negative integer");
+        }
+        if (offset >= static_cast<double>(bytes_->size())) {
+            throw std::runtime_error("memory offset out of bounds");
+        }
+        return static_cast<std::size_t>(offset);
+    }
+
+    std::shared_ptr<std::vector<std::uint8_t>> bytes_;
+};
+)cpp";
+    }
     for (const auto& code : program.global_cpp) {
         out << '\n' << code << '\n';
     }

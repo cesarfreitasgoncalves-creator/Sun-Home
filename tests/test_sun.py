@@ -488,6 +488,89 @@ class SunCompilerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("math functions require 'import math'", result.stderr)
 
+    def test_memory_regions_are_bounded_shared_and_typed(self):
+        result = self.invoke(
+            "memory.su",
+            "import memory\n"
+            "func store(buffer: region)\n"
+            "    memory.write_u8(buffer, 1, 66)\n"
+            "end\n"
+            "let buffer: region = memory.alloc(4)\n"
+            "let alias: region = buffer\n"
+            "memory.write_u8(buffer, 0, 65)\n"
+            "store(alias)\n"
+            'print("size=%v", %v=memory.size(buffer))\n'
+            "print(memory.read_u8(alias, 0))\n"
+            "print(memory.read_u8(buffer, 1))\n"
+            "print(istype(buffer, region))\n"
+            "print(istype(buffer, number))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "memory")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "size=4\n65\n66\ntrue\nfalse\n")
+
+    def test_memory_requires_import_and_rejects_regions_as_text(self):
+        missing_import = self.invoke(
+            "memory-missing-import.su",
+            "let size: number = memory.size(1)\n",
+        )
+        self.assertNotEqual(missing_import.returncode, 0)
+        self.assertIn("memory functions require 'import memory'", missing_import.stderr)
+
+        print_region = self.invoke(
+            "memory-print-region.su",
+            "import memory\n"
+            "let buffer: region = memory.alloc(1)\n"
+            "print(buffer)\n",
+        )
+        self.assertNotEqual(print_region.returncode, 0)
+        self.assertIn("memory regions cannot be printed directly", print_region.stderr)
+
+    def test_memory_runtime_checks_allocation_offsets_and_byte_values(self):
+        cases = [
+            (
+                "memory-bounds.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(1)\n"
+                "print(memory.read_u8(buffer, 1))\n",
+                "memory offset out of bounds",
+            ),
+            (
+                "memory-byte-value.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(1)\n"
+                "memory.write_u8(buffer, 0, 256)\n",
+                "memory.write_u8 value must be an integer from 0 to 255",
+            ),
+            (
+                "memory-allocation-limit.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(67108865)\n",
+                "memory.alloc size must be an integer from 0 to 67108864",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name, source, "--compile")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                executable = subprocess.run(
+                    [str(WORK / source_name[:-3])],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(executable.returncode, 1)
+                self.assertIn(expected_error, executable.stderr)
+
     def test_rejects_incompatible_static_types(self):
         result = self.invoke(
             "wrong-type.su",

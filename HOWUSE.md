@@ -138,9 +138,10 @@ literal quando estiver usando argumentos formatados.
 
 ## 6. Numeros, operadores, condicoes e matematica
 
-Parametros podem declarar o tipo `string`, `number` ou `bool`. Parametros sem
-tipo continuam sendo `string` para manter compatibilidade com programas
-anteriores. Variaveis locais usam `let` e exigem tipo explicito:
+Parametros podem declarar o tipo `string`, `number`, `bool` ou, com
+`import memory`, `region`. Parametros sem tipo continuam sendo `string` para
+manter compatibilidade com programas anteriores. Variaveis locais usam `let` e
+exigem tipo explicito:
 
 ```sun
 import math
@@ -206,8 +207,9 @@ evitando loop infinito por precisao de ponto flutuante. Os valores de `range`
 sao `number` (`double`), nao inteiros.
 
 Funcoes podem declarar retorno com `: tipo` no cabecalho, usando `string`,
-`number` ou `bool`. Sem anotacao, a funcao retorna `void`. Todo caminho de uma
-funcao com retorno tipado deve retornar um valor do tipo declarado:
+`number`, `bool` ou `region` (com `import memory`). Sem anotacao, a funcao
+retorna `void`. Todo caminho de uma funcao com retorno tipado deve retornar um
+valor do tipo declarado:
 
 ```sun
 func dobro(valor: number): number
@@ -239,7 +241,7 @@ funcoes. Ao chamar a funcao, pode-se omitir qualquer sufixo de parametros que
 tenha default.
 
 `istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
-`number` ou `bool` e devolve `bool`:
+`number`, `bool` ou `region` (que requer `import memory`) e devolve `bool`:
 
 ```sun
 let idade: number = 20
@@ -273,7 +275,36 @@ funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
 recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
 implementada usando `<cmath>` do C++.
 
-## 7. C++ inline
+## 7. Biblioteca `memory`
+
+`import memory` habilita regioes de bytes gerenciadas, sem expor enderecos
+arbitrarios nem ponteiros nativos. Cada alocacao e limitada a 64 MiB; offsets
+precisam ser numeros inteiros dentro dos limites da regiao e os valores escritos
+precisam estar entre 0 e 255:
+
+```sun
+import memory
+
+let buffer: region = memory.alloc(4)
+memory.write_u8(buffer, 0, 65)
+let first_byte: number = memory.read_u8(buffer, 0)
+print(first_byte)
+print(memory.size(buffer))
+```
+
+As operacoes disponiveis sao `memory.alloc(tamanho)`, `memory.size(regiao)`,
+`memory.read_u8(regiao, offset)` e a instrucao
+`memory.write_u8(regiao, offset, valor)`. `alloc` aceita tamanhos inteiros de
+0 a 67108864; regioes com tamanho zero nao tem offsets legiveis ou gravaveis.
+Leitura e escrita fora dos limites, offsets fracionarios/negativos e valores
+byte invalidos geram erro em tempo de execucao.
+
+Uma regiao atribuida a outra variavel ou passada para uma funcao referencia a
+mesma alocacao. A memoria e liberada automaticamente quando nao houver mais
+regioes referenciando-a. O tipo `region` nao pode ser impresso, formatado ou
+comparado diretamente.
+
+## 8. C++ inline
 
 Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
 que ainda nao existem na linguagem. O terminador e `endcpp`:
@@ -304,7 +335,7 @@ O trecho inline precisa ser C++ valido e compativel com o compilador escolhido.
 Ele e codigo nativo sem isolamento: pode afetar qualquer estado acessivel ao
 programa. Sun nao valida nem torna seguro esse C++.
 
-## 8. Comentarios e regras atuais
+## 9. Comentarios e regras atuais
 
 Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
 
@@ -317,11 +348,11 @@ Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
 numeros, booleanos, operadores aritmeticos, de comparacao e logicos, f-strings,
 `%v`, `if`/`elif`/`else`, loops `while` e `for` por `range`, retornos tipados,
-a biblioteca `math`, `istype`, parametros com valores padrao e C++ inline.
+as bibliotecas `math` e `memory`, `istype`, parametros com valores padrao e C++ inline.
 Ainda nao ha listas, entrada interativa, funcoes aninhadas ou comentarios no
 fim de uma linha.
 
-## 9. Erros e acessibilidade
+## 10. Erros e acessibilidade
 
 Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
 Por exemplo:
@@ -347,7 +378,7 @@ Problemas comuns:
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe
   o compilador com `--compiler`.
 
-## 10. Executar os testes
+## 11. Executar os testes
 
 Com Python 3 instalado:
 

@@ -21,7 +21,8 @@ em [HOWUSE.md](HOWUSE.md).
 - Funcoes com parametros tipados (`string`, `number`, `bool`, `int`, `char`,
   listas e `region`) e blocos `end`.
 - Chamadas de funcao e `print(...)`.
-- Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
+- Variaveis locais tipadas com `let`, constantes imutaveis com `const`,
+  operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
 - Listas homogeneas tipadas com indexacao, `append`, `insert`, `remove`,
   `pop`, `contains`, `clear`, `len` e iteracao.
@@ -30,7 +31,8 @@ em [HOWUSE.md](HOWUSE.md).
 - Tuplas heterogeneas, fixas e imutaveis com acesso por indice literal.
 - `match` para valores escalares e variantes de enum; enums podem carregar campos tipados.
 - Funcoes aninhadas com captura de variaveis externas por referencia.
-- `input(prompt, tipo)` para leitura tipada e `try`/`catch` para erros de runtime Sun.
+- `input(prompt, tipo)` para leitura tipada, `try`/`catch` e erros personalizados
+  com `AnError` e `raise`.
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
@@ -41,7 +43,7 @@ em [HOWUSE.md](HOWUSE.md).
 - `import io` para leitura, escrita, append e verificacao de arquivos.
 - `import sys` para argumentos do executavel, identificacao da plataforma e saida.
 - Imports de modulos locais com alias, structs, enums e classes simples com
-  campos, metodos e `init`.
+  campos, metodos e `init`; classes de erro podem herdar de `AnError`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como
@@ -50,7 +52,8 @@ em [HOWUSE.md](HOWUSE.md).
 - `--check` para validar sintaxe e tipos sem gerar C++.
 
 Comentarios com `#` podem aparecer no fim de uma linha fora de strings. Sun
-ainda esta em prototipo; heranca continua sem suporte.
+ainda esta em prototipo; heranca entre classes comuns nao esta disponivel,
+exceto para classes de erro que herdam de `AnError`.
 
 `inline cpp` executa codigo C++ nativo sem isolamento ou validacao de seguranca.
 Use somente com codigo confiavel; nao e uma sandbox.

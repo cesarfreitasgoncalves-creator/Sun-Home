@@ -36,6 +36,8 @@ struct Signature {
 struct Symbol {
     Type type;
     std::string cpp_name;
+    bool is_const = false;
+    std::optional<Expression> constant_value = std::nullopt;
 };
 
 struct ExprValue {
@@ -968,7 +970,12 @@ private:
             const auto found = symbols_.find(name);
             if (found == symbols_.end()) {
                 throw ParseError(line_, "unknown value '" + name + "'",
-                                 "Declare the value with 'let' or pass it as a function parameter.");
+                                 "Declare the value with 'let' or 'const', or pass it as a function parameter.");
+            }
+            if (found->second.constant_value) {
+                return parse_postfix(make_expr_value(
+                    found->second.type, constant_cpp(*found->second.constant_value),
+                    *found->second.constant_value));
             }
             return parse_postfix(make_expr_value(
                 found->second.type, found->second.cpp_name,
@@ -1241,6 +1248,39 @@ private:
                                        [](const Function& method) {
                                            return method.name == "init";
                                        });
+        if (definition.is_error) {
+            std::vector<Expression> constructor_arguments;
+            std::ostringstream construction;
+            construction << "SunType_" << definition.name << '(';
+            if (init != definition.methods.end()) {
+                const auto signature = signatures_.find(definition.name + ".init");
+                if (signature == signatures_.end()) {
+                    throw std::logic_error("error class initializer signature is missing");
+                }
+                append_call_arguments(construction, definition.name, signature->second,
+                                      arguments);
+                for (std::size_t i = 0; i < arguments.size(); ++i) {
+                    constructor_arguments.push_back(converted_expression(
+                        signature->second.parameters[i], arguments[i].type,
+                        arguments[i].ast));
+                }
+            } else {
+                if (arguments.size() != 1 || arguments.front().type != Type::string) {
+                    throw ParseError(
+                        line_, "error constructor '" + definition.name +
+                                   "' expects one string message");
+                }
+                construction << arguments.front().cpp;
+                constructor_arguments.push_back(arguments.front().ast);
+            }
+            construction << ')';
+            const auto type = types_.at(definition.name);
+            return make_expr_value(
+                type, construction.str(),
+                make_expression(Expression::Kind::call, type,
+                                "SunType_" + definition.name,
+                                std::move(constructor_arguments)));
+        }
         if (definition.is_class && init != definition.methods.end()) {
             const auto signature = signatures_.find(definition.name + ".init");
             validate_call_arity(definition.name, signature->second, arguments.size(), line_);
@@ -1947,6 +1987,15 @@ public:
         }
         memory_imported_ = result.memory_imported;
         io_imported_ = result.io_imported;
+        const Type an_error_type{Type::Kind::custom, "AnError"};
+        types_.emplace("AnError", an_error_type);
+        CustomTypeDefinition an_error;
+        an_error.name = "AnError";
+        an_error.is_class = true;
+        an_error.is_error = true;
+        an_error.is_error_base = true;
+        custom_types_.emplace("AnError", an_error);
+        result.custom_types.push_back(std::move(an_error));
         prepare_custom_types(index, result);
         int declaration_depth = 0;
         for (std::size_t i = index; i < lines_.size(); ++i) {
@@ -2037,6 +2086,7 @@ private:
         std::size_t end;
         std::string kind;
         std::string name;
+        bool is_error = false;
     };
 
     void prepare_custom_types(std::size_t first, Program& program) {
@@ -2048,7 +2098,19 @@ private:
             else if (starts_word(text, "struct")) kind = "struct";
             else if (starts_word(text, "enum")) kind = "enum";
             else continue;
-            const auto name = trim(text.substr(kind.size()));
+            const auto declaration = trim(text.substr(kind.size()));
+            std::string name = declaration;
+            bool is_error = false;
+            if (kind == "class" && declaration.find('(') != std::string::npos) {
+                const auto header = parse_call(declaration, lines_[i].number);
+                const auto bases = split_arguments(header.second, lines_[i].number);
+                if (bases.size() != 1 || bases.front() != "AnError") {
+                    throw ParseError(lines_[i].number,
+                                     "class inheritance currently supports only '(AnError)'");
+                }
+                name = header.first;
+                is_error = true;
+            }
             if (!is_identifier(name)) {
                 throw ParseError(lines_[i].number, "expected " + kind + " name");
             }
@@ -2075,7 +2137,7 @@ private:
             }
             const Type custom_type{Type::Kind::custom, name};
             types_.emplace(name, custom_type);
-            ranges.push_back({i, end, kind, name});
+            ranges.push_back({i, end, kind, name, is_error});
             i = end;
         }
 
@@ -2084,6 +2146,7 @@ private:
             definition.name = range.name;
             definition.is_class = range.kind == "class";
             definition.is_enum = range.kind == "enum";
+            definition.is_error = range.is_error;
             custom_types_.emplace(range.name, std::move(definition));
         }
 
@@ -2092,6 +2155,7 @@ private:
             definition.name = range.name;
             definition.is_class = range.kind == "class";
             definition.is_enum = range.kind == "enum";
+            definition.is_error = range.is_error;
             std::unordered_map<std::string, bool> seen_members;
             for (std::size_t i = range.start + 1; i < range.end; ++i) {
                 const auto& line = lines_[i];
@@ -2111,6 +2175,13 @@ private:
                                         return parameter.default_value.has_value();
                                     })) {
                         throw ParseError(line.number, "class init parameters cannot have defaults");
+                    }
+                    if (definition.is_error && method.name == "init" &&
+                        (method.parameters.empty() ||
+                         method.parameters.front().type != Type::string)) {
+                        throw ParseError(
+                            line.number,
+                            "error class init must take a string message as its first parameter");
                     }
                     if (method.name != "init" &&
                         std::any_of(method.parameters.begin(), method.parameters.end(),
@@ -3072,6 +3143,47 @@ private:
         return cpp_type(type) + " sun_var_" + name + " = " + initial_value + ";";
     }
 
+    std::string parse_const(const SourceLine& line, Symbols& symbols, bool math_imported) {
+        const auto declaration = trim(line.text.substr(5));
+        const auto equals = find_assignment_operator(declaration);
+        if (equals == std::string::npos) {
+            throw ParseError(line.number, "expected 'const name: type = expression'");
+        }
+        const auto typed_name = trim(declaration.substr(0, equals));
+        const auto colon = typed_name.find(':');
+        if (colon == std::string::npos) {
+            throw ParseError(line.number,
+                             "constants require an explicit type, e.g. 'const limit: int = int(10)'");
+        }
+        const auto name = trim(typed_name.substr(0, colon));
+        if (!is_identifier(name)) {
+            throw ParseError(line.number, "invalid constant name '" + name + "'");
+        }
+        if (symbols.find(name) != symbols.end()) {
+            throw ParseError(line.number, "value '" + name + "' is already declared in this scope");
+        }
+        const auto type = parse_type(trim(typed_name.substr(colon + 1)), line.number,
+                                     types_);
+        const auto value = expression(trim(declaration.substr(equals + 1)), line.number,
+                                      symbols, math_imported);
+        if (!can_assign(type, value.type)) {
+            throw ParseError(line.number, "cannot initialize " + cpp_type(type) +
+                                           " constant with a " + cpp_type(value.type) +
+                                           " value");
+        }
+        auto folded = fold_constant_expression(
+            type, converted_expression(type, value.type, value.ast));
+        if (!folded) {
+            throw ParseError(line.number,
+                             "constant initializer must be a compile-time constant expression",
+                             "Use literals, other constants, and operations that can be safely evaluated at compile time.");
+        }
+        const auto cpp_name = "sun_const_" + name;
+        symbols.emplace(name, Symbol{type, cpp_name, true, *folded});
+        return "const " + cpp_type(type) + " " + cpp_name + " = " +
+               constant_cpp(*folded) + ";";
+    }
+
     std::string parse_assignment(const SourceLine& line, Symbols& symbols,
                                  bool math_imported) const {
         const auto equals = line.text.find('=');
@@ -3079,6 +3191,9 @@ private:
         const auto found = symbols.find(name);
         if (found == symbols.end()) {
             throw ParseError(line.number, "cannot assign to undeclared value '" + name + "'");
+        }
+        if (found->second.is_const) {
+            throw ParseError(line.number, "cannot assign to constant '" + name + "'");
         }
         const auto value = expression(trim(line.text.substr(equals + 1)), line.number,
                                       symbols, math_imported);
@@ -3121,6 +3236,23 @@ private:
         }
         if (returns) *returns = true;
         return "return;";
+    }
+
+    Statement parse_raise(const SourceLine& line, Symbols& symbols, bool math_imported,
+                          bool* definitely_returns) {
+        const auto value_text = trim(line.text.substr(5));
+        if (value_text.empty()) {
+            throw ParseError(line.number, "raise requires an AnError value");
+        }
+        const auto value = expression(value_text, line.number, symbols, math_imported);
+        const auto error_type = value.type.kind == Type::Kind::custom
+                                    ? custom_types_.find(value.type.name)
+                                    : custom_types_.end();
+        if (error_type == custom_types_.end() || !error_type->second.is_error) {
+            throw ParseError(line.number, "raise requires an AnError or a subclass");
+        }
+        if (definitely_returns) *definitely_returns = true;
+        return Statement{RaiseStatement{value.ast}, line.number};
     }
 
     PrintStatement parse_print(const SourceLine& line, const std::string& arguments_text,
@@ -3570,6 +3702,16 @@ private:
         }
         if (starts_word(text, "let")) {
             auto result = parse_let(line, symbols, math_imported);
+            ++index;
+            return result;
+        }
+        if (starts_word(text, "const")) {
+            auto result = parse_const(line, symbols, math_imported);
+            ++index;
+            return result;
+        }
+        if (starts_word(text, "raise")) {
+            auto result = parse_raise(line, symbols, math_imported, definitely_returns);
             ++index;
             return result;
         }

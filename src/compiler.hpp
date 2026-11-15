@@ -35,6 +35,8 @@ enum class Keyword {
     end_,
     print_,
     assert_,
+    const_,
+    raise_,
     true_,
     false_,
     and_,
@@ -156,6 +158,10 @@ struct AssertStatement {
     Expression condition;
 };
 
+struct RaiseStatement {
+    Expression error;
+};
+
 struct DictionaryAssignmentStatement {
     Expression dictionary;
     Expression key;
@@ -231,7 +237,8 @@ struct TryCatchStatement {
 
 struct Statement {
     using Node = std::variant<RawStatement, PrintStatement, DictionaryAssignmentStatement,
-                              AssertStatement, IfStatement, MatchStatement, LocalFunctionStatement,
+                              AssertStatement, RaiseStatement, IfStatement, MatchStatement,
+                              LocalFunctionStatement,
                               WhileStatement, RangeForStatement,
                               ForEachStatement, TryCatchStatement>;
 
@@ -265,6 +272,8 @@ struct CustomTypeDefinition {
     std::string name;
     bool is_class = false;
     bool is_enum = false;
+    bool is_error = false;
+    bool is_error_base = false;
     std::vector<Field> fields;
     std::vector<std::string> enum_values;
     std::vector<EnumVariant> enum_variants;

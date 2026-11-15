@@ -45,6 +45,30 @@ Expression constant_expression(Type type, const ConstantValue& value) {
                            std::get<std::string>(value));
 }
 
+bool is_single_utf8_character(const std::string& value) {
+    if (value.empty()) return false;
+    const auto first = static_cast<unsigned char>(value[0]);
+    std::size_t length = 0;
+    if (first <= 0x7f) length = 1;
+    else if (first >= 0xc2 && first <= 0xdf) length = 2;
+    else if (first >= 0xe0 && first <= 0xef) length = 3;
+    else if (first >= 0xf0 && first <= 0xf4) length = 4;
+    else return false;
+    if (value.size() != length) return false;
+    for (std::size_t i = 1; i < length; ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte < 0x80 || byte > 0xbf) return false;
+    }
+    if (length >= 3) {
+        const auto second = static_cast<unsigned char>(value[1]);
+        if ((first == 0xe0 && second < 0xa0) ||
+            (first == 0xed && second > 0x9f) ||
+            (first == 0xf0 && second < 0x90) ||
+            (first == 0xf4 && second > 0x8f)) return false;
+    }
+    return true;
+}
+
 
 std::optional<ConstantValue> evaluate_constant(const Expression& expression) {
     const auto child = [&](std::size_t index) {
@@ -232,6 +256,14 @@ std::optional<ConstantValue> evaluate_constant(const Expression& expression) {
         return std::nullopt;
     }
     case Expression::Kind::call: {
+        if (expression.value == "sun_to_char" && expression.children.size() == 1) {
+            const auto value = child(0);
+            if (!value || !std::holds_alternative<std::string>(*value) ||
+                !is_single_utf8_character(std::get<std::string>(*value))) {
+                return std::nullopt;
+            }
+            return *value;
+        }
         if (expression.value == "sun_to_int" && expression.children.size() == 1) {
             const auto value = child(0);
             if (!value) return std::nullopt;

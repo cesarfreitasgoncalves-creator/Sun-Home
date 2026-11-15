@@ -127,6 +127,8 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* assertion = std::get_if<AssertStatement>(&statement.node)) {
         out << prefix << "if (!(" << emit_expression(assertion->condition)
             << ")) throw SunRuntimeError(\"assertion failed\");\n";
+    } else if (const auto* raised = std::get_if<RaiseStatement>(&statement.node)) {
+        out << prefix << "throw " << emit_expression(raised->error) << ";\n";
     } else if (const auto* assignment =
                    std::get_if<DictionaryAssignmentStatement>(&statement.node)) {
         out << prefix << emit_expression(assignment->dictionary) << '['
@@ -279,6 +281,13 @@ class SunRuntimeError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+class AnError : public SunRuntimeError {
+public:
+    using SunRuntimeError::SunRuntimeError;
+};
+
+using SunType_AnError = AnError;
 
 template <typename Map, typename Key>
 decltype(auto) sun_dict_at(Map& values, const Key& key) {
@@ -588,6 +597,7 @@ private:
 )cpp";
     }
     for (const auto& type : program.custom_types) {
+        if (type.is_error_base) continue;
         if (type.is_enum) {
             const bool has_payload = std::any_of(
                 type.enum_variants.begin(), type.enum_variants.end(),
@@ -633,7 +643,25 @@ private:
             out << ">;\n";
             continue;
         }
-        out << "\nstruct SunType_" << type.name << " {\n";
+        out << "\nstruct SunType_" << type.name;
+        if (type.is_error) out << " : public AnError";
+        out << " {\n";
+        if (type.is_error) {
+            const auto init = std::find_if(
+                type.methods.begin(), type.methods.end(),
+                [](const Function& method) { return method.name == "init"; });
+            if (init == type.methods.end()) {
+                out << "    using AnError::AnError;\n";
+            } else {
+                out << "    SunType_" << type.name << '(';
+                for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+                    if (i) out << ", ";
+                    out << cpp_type(init->parameters[i].type) << " sun_arg_"
+                        << init->parameters[i].name;
+                }
+                out << ");\n";
+            }
+        }
         for (const auto& field : type.fields) {
             out << "    " << cpp_type(field.type) << ' ' << field.name << "{};\n";
         }
@@ -649,7 +677,7 @@ private:
         out << "};\n";
     }
     for (const auto& type : program.custom_types) {
-        if (!type.is_class) continue;
+        if (!type.is_class || type.is_error) continue;
         const auto init = std::find_if(type.methods.begin(), type.methods.end(),
                                        [](const Function& method) {
                                            return method.name == "init";
@@ -770,7 +798,27 @@ private:
         out << ") {\n" << render_block(function.body, 4) << "}\n\n";
     }
     for (const auto& type : program.custom_types) {
-        if (!type.is_class) continue;
+        if (!type.is_error || type.is_error_base) continue;
+        const auto init = std::find_if(
+            type.methods.begin(), type.methods.end(),
+            [](const Function& method) { return method.name == "init"; });
+        if (init == type.methods.end()) continue;
+        out << "SunType_" << type.name << "::SunType_" << type.name << '(';
+        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << cpp_type(init->parameters[i].type) << " sun_arg_"
+                << init->parameters[i].name;
+        }
+        out << ") : AnError(sun_arg_" << init->parameters.front().name << ") {\n"
+            << "    init(";
+        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << "sun_arg_" << init->parameters[i].name;
+        }
+        out << ");\n}\n\n";
+    }
+    for (const auto& type : program.custom_types) {
+        if (!type.is_class || type.is_error) continue;
         const auto init = std::find_if(type.methods.begin(), type.methods.end(),
                                        [](const Function& method) {
                                            return method.name == "init";

@@ -189,6 +189,21 @@ def contar(): number
 end
 ```
 
+Use `const nome: tipo = expressao` para declarar uma constante imutavel. O tipo
+e explicito e o inicializador precisa ser uma expressao escalar que possa ser
+calculada com seguranca durante a compilacao; outras constantes podem ser
+usadas no calculo:
+
+```sun
+const base: int = int(20)
+const resposta: int = base + int(22)
+print(resposta)
+```
+
+O compilador substitui usos dessas constantes pelo valor calculado. Valores
+mutaveis e operacoes que podem falhar, como divisao por zero, nao sao aceitos
+como inicializadores de `const`.
+
 Operadores aritmeticos: `+`, `-`, `*`, `/` e `%` (resto). `+` tambem concatena
 duas strings. `int` e um inteiro assinado de 64 bits: sua divisao trunca em
 direcao a zero e overflow ou divisao por zero geram erro em runtime.
@@ -530,8 +545,9 @@ print(counter.value)
 
 Tipos customizados podem ser usados em parametros, retornos e variaveis.
 Campos podem usar os tipos escalares ja suportados, mas nao outros tipos
-customizados ou listas. Heranca, classes genericas e listas de objetos ainda nao
-sao suportadas.
+customizados ou listas. Heranca entre classes comuns, classes genericas e listas
+de objetos ainda nao sao suportadas. Uma classe de erro pode herdar diretamente
+de `AnError`, conforme descrito na secao de erros.
 
 Enums podem declarar variantes com campos escalares, e `match` seleciona um
 bloco por valor ou variante. Os campos de uma variante podem ser ligados a nomes
@@ -690,7 +706,8 @@ loops `while`, `for` por `range` e `for` por lista, retornos tipados,
 `try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
 `memory`, `istype`, parametros com valores padrao, imports de modulos locais,
 structs, enums com payload, `match`, classes simples, funcoes aninhadas,
-dicionarios e C++ inline. Heranca ainda nao e suportada.
+dicionarios e C++ inline. Heranca entre classes comuns ainda nao e suportada;
+classes de erro podem herdar de `AnError`.
 
 ## 11. Erros e acessibilidade
 
@@ -722,6 +739,30 @@ catch erro:
     print(f"Entrada invalida: {erro}")
 end
 ```
+
+Erros personalizados herdam da classe-base `AnError` e sao lancados com
+`raise`. O metodo `init`, quando declarado, precisa receber a mensagem como
+primeiro argumento `string`; os demais parametros podem inicializar campos do
+erro:
+
+```sun
+class ValidationError(AnError)
+    code: int
+    def init(message: string, code: int)
+        self.code = code
+    end
+end
+
+try:
+    raise ValidationError("entrada invalida", int(12))
+catch erro:
+    print(erro)
+end
+```
+
+`raise` aceita somente um valor de `AnError` ou de uma classe que herde dela.
+O `catch` atual captura qualquer erro de runtime Sun e disponibiliza sua
+mensagem como `string`.
 
 `catch` nao captura erros de sintaxe/tipo da compilacao nem excecoes arbitrarias
 de C++ inline.

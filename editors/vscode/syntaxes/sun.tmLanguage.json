@@ -30,7 +30,7 @@
     },
     {
       "name": "keyword.control.sun",
-      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|catch|let|return|break|continue|import|end|print|assert|and|or|not)\\b"
+      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|catch|let|const|raise|return|break|continue|import|end|print|assert|and|or|not)\\b"
     },
     {
       "name": "entity.name.function.sun",

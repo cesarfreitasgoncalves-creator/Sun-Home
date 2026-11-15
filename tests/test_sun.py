@@ -440,6 +440,122 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "14\ntrue\n9\n0.333333\n")
 
+    def test_const_values_are_immutable_and_folded(self):
+        result = self.invoke(
+            "const-values.su",
+            "const base: int = int(20)\n"
+            "const answer: int = base + int(22)\n"
+            'const greeting: string = "Sun"\n'
+            'const symbol: char = char("☀")\n'
+            "print(answer)\n"
+            "print(greeting)\n"
+            "print(symbol)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = (WORK / "const-values.cpp").read_text(encoding="utf-8")
+        main_body = generated.split("int main()", 1)[1]
+        self.assertIn("sun_to_string(std::int64_t{42})", main_body)
+        executable = subprocess.run(
+            [str(WORK / "const-values")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "42\nSun\n☀\n")
+
+    def test_const_rejects_mutation_and_nonconstant_initializers(self):
+        reassignment = self.invoke(
+            "const-reassignment.su",
+            "const limit: int = int(4)\n"
+            "limit = int(5)\n",
+            "--check",
+        )
+        self.assertNotEqual(reassignment.returncode, 0)
+        self.assertIn("cannot assign to constant 'limit'", reassignment.stderr)
+
+        nonconstant = self.invoke(
+            "const-variable.su",
+            "let value: int = int(2)\n"
+            "const result: int = value\n",
+            "--check",
+        )
+        self.assertNotEqual(nonconstant.returncode, 0)
+        self.assertIn("constant initializer must be a compile-time constant expression",
+                      nonconstant.stderr)
+
+        failing = self.invoke(
+            "const-division-by-zero.su",
+            "const value: int = int(1) / int(0)\n",
+            "--check",
+        )
+        self.assertNotEqual(failing.returncode, 0)
+        self.assertIn("constant initializer must be a compile-time constant expression",
+                      failing.stderr)
+
+    def test_anerror_subclasses_can_be_raised_and_caught(self):
+        result = self.invoke(
+            "custom-errors.su",
+            "class InputError(AnError)\n"
+            "    code: int\n"
+            "    def init(message: string, code: int)\n"
+            "        self.code = code\n"
+            "    end\n"
+            "    def get_code(): int\n"
+            "        return self.code\n"
+            "    end\n"
+            "end\n"
+            'let error: InputError = InputError("invalid input", int(9))\n'
+            "print(error.get_code())\n"
+            "try:\n"
+            "    raise error\n"
+            "catch message:\n"
+            "    print(message)\n"
+            "end\n"
+            "try:\n"
+            '    raise AnError("base error")\n'
+            "catch message:\n"
+            "    print(message)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "custom-errors")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "9\ninvalid input\nbase error\n")
+
+    def test_raise_rejects_non_errors_and_unsupported_inheritance(self):
+        not_error = self.invoke(
+            "raise-non-error.su",
+            "class Point\n"
+            "    x: int\n"
+            "end\n"
+            "raise Point(int(1))\n",
+            "--check",
+        )
+        self.assertNotEqual(not_error.returncode, 0)
+        self.assertIn("raise requires an AnError or a subclass", not_error.stderr)
+
+        unsupported_base = self.invoke(
+            "unsupported-base.su",
+            "class Parent\n"
+            "end\n"
+            "class Child(Parent)\n"
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(unsupported_base.returncode, 0)
+        self.assertIn("class inheritance currently supports only '(AnError)'",
+                      unsupported_base.stderr)
+
     def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
         result = self.invoke(
             "assertion.su",

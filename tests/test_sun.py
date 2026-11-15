@@ -55,10 +55,24 @@ class SunCompilerTests(unittest.TestCase):
     def test_check_reports_errors_with_source_context(self):
         result = self.invoke("check-error.su", 'print("ok")\nmissing()\n', "--check")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 2: error: unknown function 'missing'", result.stderr)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("check-error.su:2:1", result.stderr)
         self.assertIn("  2 | missing()", result.stderr)
-        self.assertIn("    | ^", result.stderr)
+        self.assertIn("    | ^^^^^^^", result.stderr)
+        self.assertIn("= help: Check the spelling or declare the function", result.stderr)
         self.assertFalse((WORK / "check-error.cpp").exists())
+
+    def test_old_func_keyword_explains_its_replacement(self):
+        result = self.invoke("old-function-keyword.su", "func greet()\nend\n", "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("keyword 'func' was renamed to 'def'", result.stderr)
+        self.assertIn("= help: Replace 'func' with 'def'", result.stderr)
+
+    def test_check_explains_unknown_values_at_their_column(self):
+        result = self.invoke("unknown-value.su", "print(missing)\n", "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown-value.su:1:7", result.stderr)
+        self.assertIn("= help: Declare the value with 'let'", result.stderr)
 
     def test_check_rejects_output_and_compilation_options(self):
         ignored_output = WORK / "ignored.cpp"
@@ -74,7 +88,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_trailing_comments_preserve_strings_and_inline_cpp(self):
         result = self.invoke(
             "trailing-comments.su",
-            "func show()\n"
+            "def show()\n"
             '    print("Sun # language comment") # ignored after expression\n'
             "    inline cpp:\n"
             '        std::cout << "C++ comment follows" << \'\\n\'; // # remains C++ text\n'
@@ -201,7 +215,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_tuples_are_typed_immutable_and_indexed_at_compile_time(self):
         result = self.invoke(
             "tuples.su",
-            "func swap(pair: tuple[int, string]): tuple[string, int]\n"
+            "def swap(pair: tuple[int, string]): tuple[string, int]\n"
             "    return (pair[1], pair[0])\n"
             "end\n"
             'let pair: tuple[int, string] = (int(42), "Ada")\n'
@@ -274,7 +288,7 @@ class SunCompilerTests(unittest.TestCase):
             "greeting.su",
             'greet("Sun")\n'
             '\n'
-            'func greet(name)\n'
+            'def greet(name)\n'
             '    print("Hello, " + name + "!\\n")\n'
             'end\n',
             "--compile",
@@ -298,10 +312,10 @@ class SunCompilerTests(unittest.TestCase):
     def test_f_strings_interpolate_parameters_and_escape_braces(self):
         result = self.invoke(
             "f-string.su",
-            "func double(value: number): number\n"
+            "def double(value: number): number\n"
             "    return value * 2\n"
             "end\n"
-            'func greet(name)\n'
+            'def greet(name)\n'
             "    let count: int = int(3)\n"
             "    let items: list[int] = [int(7)]\n"
             '    print(f"Hello, {name}! {{welcome}}" + " again")\n'
@@ -337,7 +351,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_formatted_print_substitutes_values_and_escaped_percent(self):
         result = self.invoke(
             "formatted-print.su",
-            'func greet(name)\n'
+            'def greet(name)\n'
             '    print("Seu nome é %v (100%% Sun).", %v=name)\n'
             '    print("%v and %v.", %v=name, %v="Sun")\n'
             'end\n'
@@ -366,13 +380,13 @@ class SunCompilerTests(unittest.TestCase):
     def test_empty_print_has_a_source_error(self):
         result = self.invoke("empty-print.su", "print()\n")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 1: error: expected print(expression)", result.stderr)
+        self.assertIn("error: expected print(expression)", result.stderr)
 
     def test_numeric_operators_math_and_if_elif_else(self):
         result = self.invoke(
             "math-branches.su",
             "import math\n"
-            "func classify(x: number)\n"
+            "def classify(x: number)\n"
             "    let magnitude: number = math.sqrt(math.pow(x, 2))\n"
             "    let score: number = magnitude + 2 * 3\n"
             "    if score < 7:\n"
@@ -402,7 +416,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_numeric_precedence_fractional_division_and_nested_conditions(self):
         result = self.invoke(
             "operators.su",
-            "func check()\n"
+            "def check()\n"
             "    let value: number = -9 / 2 + 3 % 2 - 0\n"
             "    if value <= -3:\n"
             "        if value >= -3.5:\n"
@@ -436,7 +450,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_boolean_parameters_conditions_and_interpolation(self):
         result = self.invoke(
             "booleans.su",
-            "func show(enabled: bool)\n"
+            "def show(enabled: bool)\n"
             "    if enabled:\n"
             '        print(f"enabled={enabled}")\n'
             "    else:\n"
@@ -465,7 +479,7 @@ class SunCompilerTests(unittest.TestCase):
             "#include <cstdio>\n"
             "static int sun_global_value = 40;\n"
             "endcpp\n"
-            "func show(value: number)\n"
+            "def show(value: number)\n"
             "    let next: number = value + 2\n"
             "    if next == 42:\n"
             "        inline cpp:\n"
@@ -495,24 +509,24 @@ class SunCompilerTests(unittest.TestCase):
     def test_logical_operators_short_circuit_loops_assignments_and_returns(self):
         result = self.invoke(
             "control-flow.su",
-            "func add(a: number, b: number): number\n"
+            "def add(a: number, b: number): number\n"
             "    let result: number = a + b\n"
             "    return result\n"
             "end\n"
-            "func label(): string\n"
+            "def label(): string\n"
             '    return "total"\n'
             "end\n"
-            "func side_effect(): bool\n"
+            "def side_effect(): bool\n"
             '    print("called")\n'
             "    return true\n"
             "end\n"
-            "func short_circuit(value: bool): bool\n"
+            "def short_circuit(value: bool): bool\n"
             "    return value and side_effect()\n"
             "end\n"
-            "func short_or(value: bool): bool\n"
+            "def short_or(value: bool): bool\n"
             "    return value or side_effect()\n"
             "end\n"
-            "func calculate(): number\n"
+            "def calculate(): number\n"
             "    let count: number = 0\n"
             "    while count < 3:\n"
             "        count = count + 1\n"
@@ -554,7 +568,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_non_void_function_requires_return_on_all_paths(self):
         result = self.invoke(
             "missing-return.su",
-            "func incomplete(enabled: bool): number\n"
+            "def incomplete(enabled: bool): number\n"
             "    if enabled:\n"
             "        return 1\n"
             "    end\n"
@@ -566,7 +580,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_assignment_type_mismatch_and_void_value_use(self):
         assignment = self.invoke(
             "bad-assignment.su",
-            'func invalid()\n'
+            'def invalid()\n'
             '    let value: number = 1\n'
             '    value = "text"\n'
             "end\n",
@@ -576,9 +590,9 @@ class SunCompilerTests(unittest.TestCase):
 
         void_value = self.invoke(
             "void-value.su",
-            "func act()\n"
+            "def act()\n"
             "end\n"
-            "func invalid(): number\n"
+            "def invalid(): number\n"
             "    return act()\n"
             "end\n",
         )
@@ -588,7 +602,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_range_rejects_zero_step_at_runtime(self):
         result = self.invoke(
             "zero-range.su",
-            "func start()\n"
+            "def start()\n"
             "    for i in range(0, 3, 0):\n"
             '        print("unreachable")\n'
             "    end\n"
@@ -610,7 +624,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_break_continue_and_istype(self):
         result = self.invoke(
             "break-continue-istype.su",
-            "func total(limit: number): number\n"
+            "def total(limit: number): number\n"
             "    let result: number = 0\n"
             "    for i in range(0, limit):\n"
             "        if i == 1:\n"
@@ -648,7 +662,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_function_parameters_accept_trailing_default_values(self):
         result = self.invoke(
             "default-parameters.su",
-            "func describe(name: string = \"world\", times: number = 2): string\n"
+            "def describe(name: string = \"world\", times: number = 2): string\n"
             '    return f"Hello {name} {times}"\n'
             "end\n"
             'print(describe())\n'
@@ -673,7 +687,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_parameters_work_in_statement_calls(self):
         result = self.invoke(
             "default-call.su",
-            'func greet(name: string = "world")\n'
+            'def greet(name: string = "world")\n'
             '    print(f"Hello {name}")\n'
             "end\n"
             "greet()\n",
@@ -693,7 +707,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_values_must_be_typed_constant_expressions(self):
         wrong_type = self.invoke(
             "default-wrong-type.su",
-            'func invalid(value: number = "text")\n'
+            'def invalid(value: number = "text")\n'
             "end\n",
         )
         self.assertNotEqual(wrong_type.returncode, 0)
@@ -702,7 +716,7 @@ class SunCompilerTests(unittest.TestCase):
 
         non_constant = self.invoke(
             "default-variable.su",
-            "func invalid(value: number = other)\n"
+            "def invalid(value: number = other)\n"
             "end\n",
         )
         self.assertNotEqual(non_constant.returncode, 0)
@@ -711,7 +725,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_parameters_must_be_trailing_and_break_must_be_in_loop(self):
         invalid_defaults = self.invoke(
             "default-order.su",
-            "func invalid(first: number = 1, second: number)\n"
+            "def invalid(first: number = 1, second: number)\n"
             "end\n",
         )
         self.assertNotEqual(invalid_defaults.returncode, 0)
@@ -719,7 +733,7 @@ class SunCompilerTests(unittest.TestCase):
 
         invalid_break = self.invoke(
             "break-outside-loop.su",
-            "func invalid()\n"
+            "def invalid()\n"
             "    break\n"
             "end\n",
         )
@@ -729,7 +743,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_math_calls_without_import(self):
         result = self.invoke(
             "missing-math-import.su",
-            "func root(x: number)\n"
+            "def root(x: number)\n"
             "    let value: number = sqrt(x)\n"
             "end\n",
         )
@@ -788,7 +802,7 @@ class SunCompilerTests(unittest.TestCase):
         result = self.invoke(
             "memory.su",
             "import memory\n"
-            "func store(buffer: region)\n"
+            "def store(buffer: region)\n"
             "    memory.write_u8(buffer, 1, 66)\n"
             "end\n"
             "let buffer: region = memory.alloc(4)\n"
@@ -925,14 +939,14 @@ class SunCompilerTests(unittest.TestCase):
     def test_typed_lists_indexing_append_iteration_and_empty_initialization(self):
         result = self.invoke(
             "lists.su",
-            "func total(values: list[int]): int\n"
+            "def total(values: list[int]): int\n"
             "    let result: int = int(0)\n"
             "    for value in values:\n"
             "        result = result + value\n"
             "    end\n"
             "    return result\n"
             "end\n"
-            "func identity(values: list[int]): list[int]\n"
+            "def identity(values: list[int]): list[int]\n"
             "    return values\n"
             "end\n"
             "let values: list[int] = []\n"
@@ -1037,8 +1051,8 @@ class SunCompilerTests(unittest.TestCase):
 
     def test_local_module_alias_and_standard_library_precedence(self):
         (WORK / "math.su").write_text(
-            "func sqrt(value: number): number\n"
-            "    func increment(value: number): number\n"
+            "def sqrt(value: number): number\n"
+            "    def increment(value: number): number\n"
             "        return value + 1\n"
             "    end\n"
             "    return increment(value)\n"
@@ -1068,7 +1082,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_local_modules_can_import_stdlib_io(self):
         (WORK / "file_tools.su").write_text(
             "import io\n"
-            "func exists(path: string): bool\n"
+            "def exists(path: string): bool\n"
             "    return io.exists(path)\n"
             "end\n",
             encoding="utf-8",
@@ -1119,7 +1133,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_local_modules_can_import_sys_stdlib(self):
         (WORK / "cli_tools.su").write_text(
             "import sys\n"
-            "func arguments(): list[string]\n"
+            "def arguments(): list[string]\n"
             "    return sys.args()\n"
             "end\n",
             encoding="utf-8",
@@ -1154,13 +1168,13 @@ class SunCompilerTests(unittest.TestCase):
             "end\n"
             "class Counter\n"
             "    value: int\n"
-            "    func init(start: int)\n"
+            "    def init(start: int)\n"
             "        self.value = start\n"
             "    end\n"
-            "    func increment()\n"
+            "    def increment()\n"
             "        self.value = self.value + int(1)\n"
             "    end\n"
-            "    func get(): int\n"
+            "    def get(): int\n"
             "        return self.value\n"
             "    end\n"
             "end\n"
@@ -1294,7 +1308,7 @@ class SunCompilerTests(unittest.TestCase):
             "    Ready\n"
             "    Busy\n"
             "end\n"
-            "func state_name(state: State): string\n"
+            "def state_name(state: State): string\n"
             "    match state:\n"
             "        case State.Ready:\n"
             '            return "ready"\n'
@@ -1302,7 +1316,7 @@ class SunCompilerTests(unittest.TestCase):
             '            return "busy"\n'
             "    end\n"
             "end\n"
-            "func bool_name(value: bool): string\n"
+            "def bool_name(value: bool): string\n"
             "    match value:\n"
             "        case true:\n"
             '            return "true"\n'
@@ -1328,12 +1342,12 @@ class SunCompilerTests(unittest.TestCase):
     def test_nested_functions_capture_variables_by_reference(self):
         result = self.invoke(
             "nested-functions.su",
-            "func run(): number\n"
+            "def run(): number\n"
             "    let total: number = 0\n"
-            "    func add(value: number)\n"
+            "    def add(value: number)\n"
             "        total = total + value\n"
             "    end\n"
-            "    func sum(value: int): int\n"
+            "    def sum(value: int): int\n"
             "        if value <= int(0):\n"
             "            return int(0)\n"
             "        end\n"
@@ -1360,8 +1374,8 @@ class SunCompilerTests(unittest.TestCase):
     def test_nested_function_is_not_visible_outside_its_scope(self):
         result = self.invoke(
             "nested-function-scope.su",
-            "func outer()\n"
-            "    func hidden()\n"
+            "def outer()\n"
+            "    def hidden()\n"
             "        print(\"hidden\")\n"
             "    end\n"
             "end\n"
@@ -1459,36 +1473,50 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_incompatible_static_types(self):
         result = self.invoke(
             "wrong-type.su",
-            'func invalid()\n'
+            'def invalid()\n'
             '    let count: number = "three"\n'
             "end\n",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot initialize double with a std::string value", result.stderr)
+        self.assertIn("= help: Make the expression's type match", result.stderr)
 
     def test_reports_unknown_function_with_source_line(self):
         result = self.invoke("bad-call.su", 'print("start")\nmissing()\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 2: error: unknown function 'missing'", result.stderr)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("bad-call.su:2:1", result.stderr)
         self.assertIn("  2 | missing()", result.stderr)
-        self.assertIn("    | ^", result.stderr)
+        self.assertIn("    | ^^^^^^^", result.stderr)
         self.assertFalse((WORK / "bad-call.cpp").exists())
 
-    def test_reports_missing_end(self):
-        result = self.invoke("open-block.su", "func hello()\nprint(\"hi\")\n")
+    def test_unknown_function_in_expression_has_a_direct_explanation(self):
+        result = self.invoke(
+            "unknown-expression-call.su",
+            "let result: number = missing()\n",
+            "--check",
+        )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 3: error: function 'hello' is missing 'end'", result.stderr)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("= help: Check the spelling or declare the function", result.stderr)
+
+    def test_reports_missing_end(self):
+        result = self.invoke("open-block.su", "def hello()\nprint(\"hi\")\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("error: function 'hello' is missing 'end'", result.stderr)
+        self.assertIn("= help: Add 'end' to close the function", result.stderr)
 
     def test_rejects_wrong_argument_count(self):
-        result = self.invoke("wrong-args.su", 'func greet(name)\nend\ngreet()\n')
+        result = self.invoke("wrong-args.su", 'def greet(name)\nend\ngreet()\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 3: error: function 'greet' expects 1 argument(s), got 0",
+        self.assertIn("error: function 'greet' expects 1 argument(s), got 0",
                       result.stderr)
+        self.assertIn("= help: Check the function declaration", result.stderr)
 
     def test_rejects_nul_in_string_literal(self):
         result = self.invoke("nul-string.su", 'print("before\x00after")\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 1: error: NUL byte is not allowed in string literal", result.stderr)
+        self.assertIn("error: NUL byte is not allowed in string literal", result.stderr)
         self.assertFalse((WORK / "nul-string.cpp").exists())
 
 

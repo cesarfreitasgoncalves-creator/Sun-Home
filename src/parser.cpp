@@ -103,12 +103,14 @@ void validate_call_arity(const std::string& name, const Signature& signature,
         if (required == signature.parameters.size()) {
             throw ParseError(line, "function '" + name + "' expects " +
                                      std::to_string(signature.parameters.size()) +
-                                     " argument(s), got " + std::to_string(supplied));
+                                     " argument(s), got " + std::to_string(supplied),
+                             "Check the function declaration and provide the required arguments.");
         }
         throw ParseError(line, "function '" + name + "' expects between " +
-                                 std::to_string(required) + " and " +
-                                 std::to_string(signature.parameters.size()) +
-                                 " argument(s), got " + std::to_string(supplied));
+                             std::to_string(required) + " and " +
+                             std::to_string(signature.parameters.size()) +
+                             " argument(s), got " + std::to_string(supplied),
+                         "Check the function declaration and provide the required arguments.");
     }
 }
 
@@ -174,6 +176,10 @@ bool is_ignored(const SourceLine& line) {
 }
 
 bool starts_word(const std::string& text, const std::string& word) {
+    const auto expected_keyword = keyword_at_start(word);
+    if (expected_keyword != Keyword::none) {
+        return keyword_at_start(text) == expected_keyword;
+    }
     return text == word ||
            (text.size() > word.size() && text.compare(0, word.size(), word) == 0 &&
             (text[word.size()] == ' ' || text[word.size()] == '\t' ||
@@ -523,8 +529,7 @@ private:
     }
 
     static bool is_logical_operator(const Token& token) {
-        return token.kind == Token::Kind::identifier &&
-               (token.text == "and" || token.text == "or");
+        return token.keyword == Keyword::and_ || token.keyword == Keyword::or_;
     }
 
     static int precedence(const std::string& op) {
@@ -566,7 +571,7 @@ private:
                 Type::number, "(-(" + operand.cpp + "))",
                 make_expression(Expression::Kind::unary, Type::number, "-", {operand.ast}));
         }
-        if (peek().kind == Token::Kind::identifier && peek().text == "not") {
+        if (peek().keyword == Keyword::not_) {
             take();
             auto operand = parse_binary(3);
             if (operand.type != Type::boolean) {
@@ -721,7 +726,8 @@ private:
                 token.text);
         }
         if (peek().kind == Token::Kind::identifier) {
-            auto name = take().text;
+            const auto identifier = take();
+            auto name = identifier.text;
             const auto custom_type = custom_types_.find(name);
             if (custom_type != custom_types_.end()) {
                 if (!custom_type->second.is_enum && accept("(")) {
@@ -800,7 +806,8 @@ private:
                 }
                 throw ParseError(line_, "type '" + name + "' must be constructed or qualified");
             }
-            if (name == "true" || name == "false") {
+            if (identifier.keyword == Keyword::true_ ||
+                identifier.keyword == Keyword::false_) {
                 return parse_postfix(make_expr_value(
                     Type::boolean, name,
                     make_expression(Expression::Kind::literal, Type::boolean, name)));
@@ -938,7 +945,8 @@ private:
             }
             const auto found = symbols_.find(name);
             if (found == symbols_.end()) {
-                throw ParseError(line_, "unknown value '" + name + "'");
+                throw ParseError(line_, "unknown value '" + name + "'",
+                                 "Declare the value with 'let' or pass it as a function parameter.");
             }
             return parse_postfix(make_expr_value(
                 found->second.type, found->second.cpp_name,
@@ -1654,10 +1662,15 @@ private:
             {"pow", {"std::pow", 2}}, {"sin", {"std::sin", 1}},
             {"sqrt", {"std::sqrt", 1}}, {"tan", {"std::tan", 1}},
         };
-        if (!math_imported_) throw ParseError(line_, "math functions require 'import math'");
         const auto function = functions.find(name);
         if (function == functions.end()) {
-            throw ParseError(line_, "unknown math function '" + name + "'");
+            throw ParseError(line_, "unknown function '" + name + "'",
+                             "Check the spelling or declare the function with 'def " +
+                                 name + "(...)'.");
+        }
+        if (!math_imported_) {
+            throw ParseError(line_, "math functions require 'import math'",
+                             "Add 'import math' before declarations and statements.");
         }
         std::vector<ExprValue> arguments;
         if (!accept(")")) {
@@ -1868,6 +1881,21 @@ public:
         bool seen_memory = false;
         bool seen_io = false;
         bool seen_sys = false;
+        bool in_inline_cpp = false;
+        for (const auto& line : lines_) {
+            if (in_inline_cpp) {
+                if (line.text == "endcpp") in_inline_cpp = false;
+                continue;
+            }
+            if (line.text == "inline cpp:") {
+                in_inline_cpp = true;
+                continue;
+            }
+            if (line.text.rfind("func ", 0) == 0) {
+                throw ParseError(line.number, "keyword 'func' was renamed to 'def'",
+                                 "Replace 'func' with 'def' in this declaration.");
+            }
+        }
         skip_ignored(index);
         while (index < lines_.size() && starts_word(lines_[index].text, "import")) {
             const auto module = trim(lines_[index].text.substr(6));
@@ -1918,7 +1946,7 @@ public:
                 if (declaration_depth > 0) --declaration_depth;
                 continue;
             }
-            if (declaration_depth == 0 && starts_word(lines_[i].text, "func")) {
+            if (declaration_depth == 0 && starts_word(lines_[i].text, "def")) {
                 auto function = parse_function_header(lines_[i]);
                 if (function.name == "print") {
                     throw ParseError(function.line, "function name 'print' is reserved");
@@ -1938,7 +1966,7 @@ public:
                 }
                 global_function_lines_.push_back(i);
             }
-            if (starts_word(lines_[i].text, "func") ||
+            if (starts_word(lines_[i].text, "def") ||
                 starts_word(lines_[i].text, "if") ||
                 starts_word(lines_[i].text, "while") ||
                 starts_word(lines_[i].text, "for") ||
@@ -2009,7 +2037,7 @@ private:
                     if (--depth == 0) break;
                     continue;
                 }
-                if (starts_word(candidate, "func") || starts_word(candidate, "if") ||
+                if (starts_word(candidate, "def") || starts_word(candidate, "if") ||
                     starts_word(candidate, "while") || starts_word(candidate, "for") ||
                     starts_word(candidate, "match") ||
                     candidate == "try:") {
@@ -2042,7 +2070,7 @@ private:
             for (std::size_t i = range.start + 1; i < range.end; ++i) {
                 const auto& line = lines_[i];
                 if (is_ignored(line)) continue;
-                if (starts_word(line.text, "func")) {
+                if (starts_word(line.text, "def")) {
                     if (!definition.is_class) {
                         throw ParseError(line.number, "only classes can declare methods");
                     }
@@ -2089,7 +2117,7 @@ private:
                             if (--method_depth == 0) break;
                             continue;
                         }
-                        if (starts_word(nested, "func") || starts_word(nested, "if") ||
+                        if (starts_word(nested, "def") || starts_word(nested, "if") ||
                             starts_word(nested, "while") || starts_word(nested, "for") ||
                             starts_word(nested, "match") ||
                             nested == "try:") {
@@ -2179,7 +2207,7 @@ private:
             for (const auto& method : definition.methods) {
                 std::size_t method_line = range.start + 1;
                 while (method_line < range.end) {
-                    if (starts_word(lines_[method_line].text, "func")) {
+                    if (starts_word(lines_[method_line].text, "def")) {
                         const auto header = trim(lines_[method_line].text.substr(4));
                         const auto close = find_call_close(header, lines_[method_line].number);
                         if (parse_call(header.substr(0, close + 1),
@@ -2284,7 +2312,7 @@ private:
 
     Function parse_function_header(const SourceLine& line) {
         const auto header = trim(line.text.substr(4));
-        if (header.empty()) throw ParseError(line.number, "expected 'func name(parameters)'");
+        if (header.empty()) throw ParseError(line.number, "expected 'def name(parameters)'");
         const auto close = find_call_close(header, line.number);
         const auto call = parse_call(header.substr(0, close + 1), line.number);
         const auto return_annotation = trim(header.substr(close + 1));
@@ -2363,7 +2391,7 @@ private:
                 starts_word(lines_[index].text, "else")) {
                 throw ParseError(lines_[index].number, "unexpected branch without an 'if'");
             }
-            if (starts_word(lines_[index].text, "func")) {
+            if (starts_word(lines_[index].text, "def")) {
                 auto function = parse_function_header(lines_[index]);
                 ++index;
                 Symbols function_symbols;
@@ -2415,7 +2443,7 @@ private:
             skip_ignored(index);
             if (index == lines_.size() || is_terminator(lines_[index].text) ||
                 (stop_at_case && starts_word(lines_[index].text, "case"))) break;
-            if (starts_word(lines_[index].text, "func")) {
+            if (starts_word(lines_[index].text, "def")) {
                 const auto statement_line = lines_[index].number;
                 auto statement = parse_local_function(index, symbols, math_imported);
                 statement.line = statement_line;
@@ -3423,7 +3451,9 @@ private:
         const auto call = parse_call(text, line.number);
         const auto signature = signatures_.find(call.first);
         if (signature == signatures_.end()) {
-            throw ParseError(line.number, "unknown function '" + call.first + "'");
+            throw ParseError(line.number, "unknown function '" + call.first + "'",
+                             "Check the spelling or declare the function with 'def " +
+                                 call.first + "(...)'.");
         }
         std::vector<ExprValue> values;
         for (const auto& argument : split_arguments(call.second, line.number)) {

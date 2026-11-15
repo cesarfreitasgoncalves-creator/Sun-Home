@@ -11,6 +11,36 @@
 
 namespace sun {
 
+enum class Keyword {
+    none,
+    def,
+    class_,
+    struct_,
+    enum_,
+    if_,
+    elif_,
+    else_,
+    while_,
+    for_,
+    in_,
+    match_,
+    case_,
+    try_,
+    catch_,
+    let_,
+    return_,
+    break_,
+    continue_,
+    import_,
+    end_,
+    print_,
+    true_,
+    false_,
+    and_,
+    or_,
+    not_
+};
+
 struct Type {
     enum class Kind {
         string,
@@ -74,9 +104,10 @@ inline const Type Type::empty_list{Type::Kind::empty_list};
 inline const Type Type::empty_dictionary{Type::Kind::empty_dictionary};
 
 struct ParseError : std::runtime_error {
-    ParseError(std::size_t line, const std::string& message)
-        : std::runtime_error(message), line(line) {}
+    ParseError(std::size_t line, const std::string& message, std::string help = {})
+        : std::runtime_error(message), line(line), help(std::move(help)) {}
     std::size_t line;
+    std::string help;
 };
 
 struct Parameter {

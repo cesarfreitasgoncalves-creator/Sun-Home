@@ -85,7 +85,7 @@ build/sun examples/hello.su -o -
 Crie um arquivo chamado `ola.su`:
 
 ```sun
-func cumprimentar(nome)
+def cumprimentar(nome)
     print(f"Ola, {nome}!")
 end
 
@@ -99,7 +99,7 @@ build/sun ola.su --compile
 ./ola
 ```
 
-`func` inicia uma funcao e `end` encerra o bloco. A indentacao e recomendada
+`def` inicia uma funcao e `end` encerra o bloco. A indentacao e recomendada
 para facilitar a leitura, mas atualmente e `end` que determina onde o bloco
 termina. Funcoes aceitam parametros de texto; chamadas podem aparecer antes ou
 depois da declaracao da funcao.
@@ -110,7 +110,7 @@ Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t` e
 `\r`. O operador `+` concatena texto:
 
 ```sun
-func mostrar(nome)
+def mostrar(nome)
     print("Ola, " + nome + "!")
 end
 ```
@@ -120,7 +120,7 @@ end
 Coloque `f` antes das aspas e escreva expressoes Sun entre chaves:
 
 ```sun
-func mostrar(nome)
+def mostrar(nome)
     print(f"Ola, {nome}!")
     print(f"2 + 3 = {2 + 3}")
     print(f"Chaves literais: {{ e }}")
@@ -139,7 +139,7 @@ Para passar valores junto com uma string de formato, associe cada `%v` a um
 argumento `%v=valor`:
 
 ```sun
-func mostrar(nome)
+def mostrar(nome)
     print("Seu nome e %v.", %v=nome)
     print("%v gosta de %v.", %v=nome, %v="Sun")
     print("Progresso: 100%%, %v esta online.", %v=nome)
@@ -162,7 +162,7 @@ tipo explicito:
 ```sun
 import math
 
-func classificar(x: number)
+def classificar(x: number)
     let magnitude: number = math.sqrt(x * x)
     let pontuacao: number = magnitude + 2 * 3
 
@@ -182,7 +182,7 @@ As variaveis declaradas com `let` e os parametros podem ser reatribuidos com
 `nome = expressao`; a expressao precisa ter o mesmo tipo:
 
 ```sun
-func contar(): number
+def contar(): number
     let total: number = 0
     total = total + 1
     return total
@@ -308,7 +308,7 @@ Tuplas juntam valores de tipos escalares diferentes em uma estrutura fixa e
 imutavel:
 
 ```sun
-func rotulo(par: tuple[int, string]): tuple[string, int]
+def rotulo(par: tuple[int, string]): tuple[string, int]
     return (par[1], par[0])
 end
 
@@ -355,7 +355,7 @@ retorna `void`. Todo caminho de uma funcao com retorno tipado deve retornar um
 valor do tipo declarado:
 
 ```sun
-func dobro(valor: number): number
+def dobro(valor: number): number
     return valor * 2
 end
 
@@ -368,7 +368,7 @@ valido em funcoes sem tipo de retorno.
 Parametros podem ter valores padrao no final da lista:
 
 ```sun
-func cumprimentar(nome: string = "mundo", vezes: number = 1)
+def cumprimentar(nome: string = "mundo", vezes: number = 1)
     for i in range(0, vezes):
         print(f"Ola, {nome}!")
     end
@@ -388,9 +388,9 @@ ficam visiveis no escopo onde foram declaradas e podem capturar variaveis
 visiveis do escopo externo por referencia, inclusive para altera-las:
 
 ```sun
-func executar(): number
+def executar(): number
     let total: number = 0
-    func adicionar(valor: number)
+    def adicionar(valor: number)
         total = total + valor
     end
     adicionar(3)
@@ -502,11 +502,11 @@ end
 class Counter
     value: int
 
-    func init(start: int)
+    def init(start: int)
         self.value = start
     end
 
-    func increment()
+    def increment()
         self.value = self.value + int(1)
     end
 end
@@ -640,7 +640,7 @@ inline cpp:
 int helper_cpp() { return 42; }
 endcpp
 
-func mostrar(valor: number)
+def mostrar(valor: number)
     let resposta: number = valor + 2
     inline cpp:
         std::cout << valor << " + 2 = " << resposta << '\n';
@@ -686,18 +686,22 @@ dicionarios e C++ inline. Heranca ainda nao e suportada.
 
 ## 11. Erros e acessibilidade
 
-Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
-Por exemplo:
+Erros de sintaxe e tipos aparecem imediatamente com arquivo, linha, coluna e
+trecho destacado. Quando possivel, Sun tambem sugere como corrigir o problema:
 
 ```text
-sun: line 3: error: unknown function 'desconhecida'
+error: unknown function 'desconhecida'
+ --> app.su:3:1
+  |
+3 | desconhecida()
+  | ^^^^^^^^^^^^
+  = help: Check the spelling or declare the function with 'def desconhecida(...)'.
 ```
 
 As mensagens sao texto simples, sem depender de cores, e os erros vao para
 `stderr`; isso permite ler a saida em terminais simples e encaminha-la para
-ferramentas assistivas. Use `-h` ou `--help` para consultar as opcoes sem
-precisar memoriza-las. A indentacao consistente e nomes descritivos ajudam a
-manter os exemplos faceis de navegar.
+ferramentas assistivas. As sugestoes de `help` aparecem junto com o diagnostico,
+sem exigir uma opcao ou comando separado.
 
 Use `try`/`catch nome:` para capturar erros de runtime produzidos por Sun
 (por exemplo, conversao ou indice invalido). O nome do `catch` recebe a

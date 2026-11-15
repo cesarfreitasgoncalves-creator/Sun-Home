@@ -3,6 +3,36 @@
 namespace sun {
 namespace {
 
+Keyword keyword_from_word(const std::string& word) {
+    if (word == "def") return Keyword::def;
+    if (word == "class") return Keyword::class_;
+    if (word == "struct") return Keyword::struct_;
+    if (word == "enum") return Keyword::enum_;
+    if (word == "if") return Keyword::if_;
+    if (word == "elif") return Keyword::elif_;
+    if (word == "else") return Keyword::else_;
+    if (word == "while") return Keyword::while_;
+    if (word == "for") return Keyword::for_;
+    if (word == "in") return Keyword::in_;
+    if (word == "match") return Keyword::match_;
+    if (word == "case") return Keyword::case_;
+    if (word == "try") return Keyword::try_;
+    if (word == "catch") return Keyword::catch_;
+    if (word == "let") return Keyword::let_;
+    if (word == "return") return Keyword::return_;
+    if (word == "break") return Keyword::break_;
+    if (word == "continue") return Keyword::continue_;
+    if (word == "import") return Keyword::import_;
+    if (word == "end") return Keyword::end_;
+    if (word == "print") return Keyword::print_;
+    if (word == "true") return Keyword::true_;
+    if (word == "false") return Keyword::false_;
+    if (word == "and") return Keyword::and_;
+    if (word == "or") return Keyword::or_;
+    if (word == "not") return Keyword::not_;
+    return Keyword::none;
+}
+
 bool is_identifier_start(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
@@ -12,6 +42,20 @@ bool is_identifier_char(char c) {
 }
 
 } // namespace
+
+Keyword keyword_at_start(const std::string& source) {
+    std::size_t start = 0;
+    while (start < source.size() &&
+           (source[start] == ' ' || source[start] == '\t' || source[start] == '\r')) {
+        ++start;
+    }
+    if (start == source.size() || !is_identifier_start(source[start])) {
+        return Keyword::none;
+    }
+    auto end = start + 1;
+    while (end < source.size() && is_identifier_char(source[end])) ++end;
+    return keyword_from_word(source.substr(start, end - start));
+}
 
 std::vector<Token> tokenize(const std::string& source, std::size_t line) {
     std::vector<Token> tokens;
@@ -61,7 +105,9 @@ std::vector<Token> tokenize(const std::string& source, std::size_t line) {
         if (is_identifier_start(c)) {
             const auto start = i++;
             while (i < source.size() && is_identifier_char(source[i])) ++i;
-            tokens.push_back({Token::Kind::identifier, source.substr(start, i - start)});
+            const auto text = source.substr(start, i - start);
+            tokens.push_back({Token::Kind::identifier, text, false,
+                              keyword_from_word(text)});
             continue;
         }
         if (c >= '0' && c <= '9') {

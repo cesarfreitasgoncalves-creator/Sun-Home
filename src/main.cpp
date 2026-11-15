@@ -93,18 +93,70 @@ Options parse_options(int argc, char** argv) {
     return options;
 }
 
-void print_parse_error(const sun::ParseError& error, const std::string& source) {
-    std::cerr << "sun: line " << error.line << ": error: " << error.what() << '\n';
+std::string diagnostic_help(const sun::ParseError& error) {
+    if (!error.help.empty()) return error.help;
+    const std::string message = error.what();
+    if (message.find("missing 'end'") != std::string::npos) {
+        return "Add 'end' to close the function, condition, loop, or match block.";
+    }
+    if (message.find("requires 'import") != std::string::npos) {
+        return "Add the required import near the top of the source file.";
+    }
+    if (message.find("must have type") != std::string::npos ||
+        message.find("type mismatch") != std::string::npos ||
+        message.find("cannot initialize") != std::string::npos) {
+        return "Make the expression's type match the expected type; use number(value) only when an int should become a number.";
+    }
+    if (message.find("expected") != std::string::npos) {
+        return "Check the punctuation and delimiters around this expression.";
+    }
+    return {};
+}
+
+void print_parse_error(const sun::ParseError& error, const std::string& source,
+                       const fs::path& source_path) {
+    std::cerr << "error: " << error.what() << '\n';
     std::istringstream lines(source);
     std::string text;
+    bool displayed_source_line = false;
     for (std::size_t number = 1; number <= error.line && std::getline(lines, text); ++number) {
         if (number != error.line) continue;
         const auto first = text.find_first_not_of(" \t\r");
-        const auto column = first == std::string::npos ? text.size() : first;
+        auto column = first == std::string::npos ? text.size() : first;
+        std::size_t underline_length = 1;
+        const std::string message = error.what();
+        if (message.rfind("unknown ", 0) == 0) {
+            const auto quote = message.find('\'');
+            const auto end_quote = quote == std::string::npos
+                                       ? std::string::npos
+                                       : message.find('\'', quote + 1);
+            if (end_quote != std::string::npos) {
+                const auto subject = message.substr(quote + 1, end_quote - quote - 1);
+                const auto subject_column = text.find(subject);
+                if (!subject.empty() && subject_column != std::string::npos) {
+                    column = subject_column;
+                    underline_length = subject.size();
+                }
+            }
+        }
         const auto width = std::to_string(number).size();
-        std::cerr << "  " << std::setw(static_cast<int>(width)) << number << " | " << text << '\n'
+        std::cerr << " --> " << source_path.string() << ':' << number << ':' << column + 1 << '\n'
+                  << "  " << std::string(width, ' ') << " |\n"
+                  << "  " << std::setw(static_cast<int>(width)) << number << " | " << text << '\n'
                   << "  " << std::string(width, ' ') << " | "
-                  << std::string(column, ' ') << "^\n";
+                  << std::string(column, ' ') << std::string(underline_length, '^') << '\n';
+        const auto help = diagnostic_help(error);
+        if (!help.empty()) std::cerr << "  = help: " << help << '\n';
+        displayed_source_line = true;
+    }
+    if (!displayed_source_line) {
+        const auto width = std::to_string(error.line).size();
+        std::cerr << " --> " << source_path.string() << ':' << error.line << ":1\n"
+                  << "  " << std::string(width, ' ') << " |\n"
+                  << "  " << std::setw(static_cast<int>(width)) << error.line << " | \n"
+                  << "  " << std::string(width, ' ') << " | ^\n";
+        const auto help = diagnostic_help(error);
+        if (!help.empty()) std::cerr << "  = help: " << help << '\n';
     }
 }
 
@@ -151,7 +203,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     } catch (const sun::ParseError& error) {
-        print_parse_error(error, source_text);
+        print_parse_error(error, source_text, argv[1]);
     } catch (const std::exception& error) {
         std::cerr << "sun: error: " << error.what() << '\n';
         if (argc < 2) print_usage(std::cerr);

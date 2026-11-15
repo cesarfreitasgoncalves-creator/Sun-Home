@@ -1,4 +1,5 @@
 #include "modules.hpp"
+#include "lexer.hpp"
 
 #include <fstream>
 #include <map>
@@ -144,17 +145,18 @@ std::vector<std::string> lines_of(const std::string& source) {
 
 std::string function_name(const std::string& line) {
     const auto text = trim(line);
-    if (text.rfind("func ", 0) != 0) return {};
-    const auto start = std::string("func ").size();
+    if (keyword_at_start(text) != Keyword::def) return {};
+    const auto start = std::string("def ").size();
     const auto open = text.find('(', start);
     if (open == std::string::npos) return {};
     return trim(text.substr(start, open - start));
 }
 
 bool is_block_start(const std::string& text) {
-    return !function_name(text).empty() || text == "try:" || text.rfind("if ", 0) == 0 ||
-           text.rfind("while ", 0) == 0 || text.rfind("for ", 0) == 0 ||
-           text.rfind("match ", 0) == 0;
+    const auto keyword = keyword_at_start(text);
+    return !function_name(text).empty() || keyword == Keyword::try_ ||
+           keyword == Keyword::if_ || keyword == Keyword::while_ ||
+           keyword == Keyword::for_ || keyword == Keyword::match_;
 }
 
 LoadedModule load_module(const fs::path& module_path, const fs::path& project_root,
@@ -300,7 +302,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
         }
         if (function_depth == 0) {
             if (text.empty() || text[0] == '#') continue;
-            if (text.rfind("func ", 0) == 0) {
+            if (keyword_at_start(text) == Keyword::def) {
                 function_depth = 1;
                 continue;
             }

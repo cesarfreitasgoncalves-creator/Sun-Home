@@ -13,15 +13,15 @@ end
 class Counter
     value: int
 
-    func init(start: int)
+    def init(start: int)
         self.value = start
     end
 
-    func increment()
+    def increment()
         self.value = self.value + int(1)
     end
 
-    func current(): int
+    def current(): int
         return self.value
     end
 end

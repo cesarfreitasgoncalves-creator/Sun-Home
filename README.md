@@ -44,7 +44,7 @@ em [HOWUSE.md](HOWUSE.md).
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
-- Erros de compilacao com numero da linha, sem saida colorida obrigatoria.
+- Erros de compilacao com arquivo, linha, coluna, trecho destacado e sugestoes.
 - `--check` para validar sintaxe e tipos sem gerar C++.
 
 Comentarios com `#` podem aparecer no fim de uma linha fora de strings. Sun

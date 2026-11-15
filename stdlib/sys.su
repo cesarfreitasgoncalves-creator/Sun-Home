@@ -33,7 +33,7 @@ void sun_sys_exit(std::int64_t code) {
 }
 endcpp
 
-func args(): list[string]
+def args(): list[string]
     let result: list[string] = []
     inline cpp:
         result = sun_sys_arguments;
@@ -41,7 +41,7 @@ func args(): list[string]
     return result
 end
 
-func platform(): string
+def platform(): string
     let result: string = ""
     inline cpp:
         result = sun_sys_platform();
@@ -49,7 +49,7 @@ func platform(): string
     return result
 end
 
-func exit(code: int)
+def exit(code: int)
     inline cpp:
         sun_sys_exit(code);
     endcpp

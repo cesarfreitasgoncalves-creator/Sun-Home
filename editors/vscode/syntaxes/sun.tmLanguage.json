@@ -1,0 +1,44 @@
+{
+  "scopeName": "source.sun",
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.sun",
+      "match": "#.*$"
+    },
+    {
+      "name": "string.quoted.double.sun",
+      "begin": "f?\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sun",
+          "match": "\\\\."
+        },
+        {
+          "name": "constant.other.placeholder.sun",
+          "match": "\\{[^{}]*\\}"
+        }
+      ]
+    },
+    {
+      "name": "constant.numeric.sun",
+      "match": "\\b(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?\\b"
+    },
+    {
+      "name": "constant.language.boolean.sun",
+      "match": "\\b(?:true|false)\\b"
+    },
+    {
+      "name": "keyword.control.sun",
+      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|catch|let|return|break|continue|import|end|print|assert|and|or|not)\\b"
+    },
+    {
+      "name": "entity.name.function.sun",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    },
+    {
+      "name": "keyword.operator.sun",
+      "match": "==|!=|<=|>=|\\+|-|\\*|/|%|=|<|>|:"
+    }
+  ]
+}

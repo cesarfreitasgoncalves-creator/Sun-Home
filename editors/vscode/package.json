@@ -1,0 +1,43 @@
+{
+  "name": "sun-language",
+  "displayName": "Sun Language",
+  "description": "Language support and file icons for Sun (.su) files.",
+  "version": "0.1.0",
+  "publisher": "sun-language",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Themes"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "sun",
+        "aliases": [
+          "Sun",
+          "sun"
+        ],
+        "extensions": [
+          ".su"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sun",
+        "scopeName": "source.sun",
+        "path": "./syntaxes/sun.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "sun-file-icons",
+        "label": "Sun File Icons",
+        "path": "./icons/sun-icon-theme.json"
+      }
+    ]
+  }
+}

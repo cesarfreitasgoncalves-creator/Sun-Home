@@ -1,5 +1,7 @@
 # Sun
 
+![Sun language logo](sunimg.jpg)
+
 Sun e uma linguagem compilada experimental com arquivos `.su`. O compilador,
 escrito em C++, traduz o subconjunto atual para C++17.
 
@@ -55,3 +57,10 @@ Use somente com codigo confiavel; nao e uma sandbox.
 
 O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
 [HOWUSE.md](HOWUSE.md) para detalhes, exemplos e regras do C++ inline.
+
+## Visual Studio Code
+
+Uma extensao basica para reconhecer arquivos `.su`, realcar a sintaxe e mostrar
+um icone Sun esta em [`editors/vscode`](editors/vscode). No VS Code, abra essa
+pasta com **Developer: Install Extension from Location...**. Para ver o icone
+dos arquivos `.su`, selecione **Sun File Icons** em **File Icon Theme**.

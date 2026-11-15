@@ -419,7 +419,9 @@ class SunCompilerTests(unittest.TestCase):
             "import math\n"
             "print(int(2) + int(3) * int(4))\n"
             "print(7 < 9)\n"
-            "print(math.sqrt(81))\n",
+            "print(math.sqrt(81))\n"
+            "print(1.0 / 3.0)\n",
+            "--compile",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         generated = (WORK / "constant-folding.cpp").read_text(encoding="utf-8")
@@ -428,6 +430,15 @@ class SunCompilerTests(unittest.TestCase):
         self.assertIn("sun_to_string(9.0)", generated)
         main_body = generated.split("int main()", 1)[1]
         self.assertNotIn("sun_int_mul", main_body)
+        executable = subprocess.run(
+            [str(WORK / "constant-folding")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "14\ntrue\n9\n0.333333\n")
 
     def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
         result = self.invoke(
@@ -455,26 +466,40 @@ class SunCompilerTests(unittest.TestCase):
         self.assertNotEqual(invalid.returncode, 0)
         self.assertIn("assert condition must be bool", invalid.stderr)
 
-    def test_constant_folding_preserves_runtime_integer_division_errors(self):
-        result = self.invoke(
-            "constant-division-error.su",
+    def test_constant_folding_preserves_runtime_integer_errors(self):
+        cases = [
+            ("int(9223372036854774784.0) + int(1024)", "int arithmetic overflow"),
+            ("int(-9223372036854775808.0) - int(1)", "int arithmetic overflow"),
+            ("int(3037000500) * int(3037000500)", "int arithmetic overflow"),
+            ("-int(-9223372036854775808.0)", "int arithmetic overflow"),
+            ("int(-9223372036854775808.0) / int(-1)", "int arithmetic overflow"),
+            ("int(8) / int(0)", "int division by zero"),
+            ("int(8) % int(0)", "int modulo by zero"),
+            ("int(9223372036854775808.0)", "int() requires an in-range whole number"),
+            ("int(1.5)", "int() requires an in-range whole number"),
+        ]
+        source = "".join(
             "try:\n"
-            "    let value: int = int(8) / int(0)\n"
+            f"    print({expression})\n"
             "catch error:\n"
             "    print(error)\n"
-            "end\n",
-            "--compile",
+            "end\n"
+            for expression, _ in cases
         )
+        result = self.invoke("constant-integer-errors.su", source, "--compile")
         self.assertEqual(result.returncode, 0, result.stderr)
         executable = subprocess.run(
-            [str(WORK / "constant-division-error")],
+            [str(WORK / "constant-integer-errors")],
             cwd=ROOT,
             text=True,
             capture_output=True,
             check=False,
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
-        self.assertEqual(executable.stdout, "int division by zero\n")
+        self.assertEqual(
+            executable.stdout,
+            "".join(f"{message}\n" for _, message in cases),
+        )
 
     def test_numeric_precedence_fractional_division_and_nested_conditions(self):
         result = self.invoke(

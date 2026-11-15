@@ -8,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+#ifndef SUN_STDLIB_DIR
+#define SUN_STDLIB_DIR "stdlib"
+#endif
+
 namespace sun {
 namespace {
 
@@ -16,6 +20,7 @@ namespace fs = std::filesystem;
 struct Import {
     std::string path;
     std::string alias;
+    bool standard = false;
 };
 
 struct LoadedModule {
@@ -24,6 +29,7 @@ struct LoadedModule {
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
 };
 
 std::string trim(const std::string& value) {
@@ -173,6 +179,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -185,6 +192,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
             else if (spec == "io") io = true;
+            else if (spec == "sys") imports.push_back({"sys", "sys", true});
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -216,29 +224,37 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     std::map<std::string, std::map<std::string, std::string>> aliases;
     std::ostringstream dependencies;
     for (const auto& import : imports) {
-        fs::path relative(import.path);
-        if (relative.is_absolute() || !relative.extension().empty()) {
-            throw std::runtime_error("local module imports use relative names without extensions");
-        }
-        for (const auto& part : relative) {
-            if (part == "." || part == ".." || part.empty()) {
-                throw std::runtime_error("local module path may not contain '.' or '..'");
+        LoadedModule dependency;
+        if (import.standard) {
+            sys = sys || import.path == "sys";
+            dependency = load_module(fs::path(SUN_STDLIB_DIR) / (import.path + ".su"),
+                                     project_root, loading, cache);
+        } else {
+            fs::path relative(import.path);
+            if (relative.is_absolute() || !relative.extension().empty()) {
+                throw std::runtime_error("local module imports use relative names without extensions");
             }
-            for (const auto c : part.string()) {
-                if (!identifier_char(c)) {
-                    throw std::runtime_error("local module path must contain identifier names");
+            for (const auto& part : relative) {
+                if (part == "." || part == ".." || part.empty()) {
+                    throw std::runtime_error("local module path may not contain '.' or '..'");
+                }
+                for (const auto c : part.string()) {
+                    if (!identifier_char(c)) {
+                        throw std::runtime_error("local module path must contain identifier names");
+                    }
                 }
             }
+            const auto dependency_path = canonical.parent_path() / relative;
+            dependency = load_module(dependency_path.string() + ".su", project_root,
+                                     loading, cache);
         }
-        const auto dependency_path = canonical.parent_path() / relative;
-        auto dependency = load_module(dependency_path.string() + ".su", project_root,
-                                      loading, cache);
         if (!aliases.emplace(import.alias, dependency.exports).second) {
             throw std::runtime_error("duplicate local module alias '" + import.alias + "'");
         }
         math = math || dependency.math;
         memory = memory || dependency.memory;
         io = io || dependency.io;
+        sys = sys || dependency.sys;
         dependencies << dependency.source;
     }
 
@@ -302,6 +318,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     loaded.math = math;
     loaded.memory = memory;
     loaded.io = io;
+    loaded.sys = sys;
     loading.erase(canonical);
     cache.emplace(canonical, loaded);
     return loaded;
@@ -322,6 +339,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -334,6 +352,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
             else if (spec == "io") io = true;
+            else if (spec == "sys") imports.push_back({"sys", "sys", true});
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -358,29 +377,37 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     std::map<std::string, std::map<std::string, std::string>> aliases;
     std::ostringstream modules;
     for (const auto& import : imports) {
-        fs::path relative(import.path);
-        if (relative.is_absolute() || !relative.extension().empty()) {
-            throw std::runtime_error("local module imports use relative names without extensions");
-        }
-        for (const auto& part : relative) {
-            if (part == "." || part == ".." || part.empty()) {
-                throw std::runtime_error("local module path may not contain '.' or '..'");
+        LoadedModule module;
+        if (import.standard) {
+            sys = sys || import.path == "sys";
+            module = load_module(fs::path(SUN_STDLIB_DIR) / (import.path + ".su"),
+                                 canonical.parent_path(), loading, cache);
+        } else {
+            fs::path relative(import.path);
+            if (relative.is_absolute() || !relative.extension().empty()) {
+                throw std::runtime_error("local module imports use relative names without extensions");
             }
-            for (const auto c : part.string()) {
-                if (!identifier_char(c)) {
-                    throw std::runtime_error("local module path must contain identifier names");
+            for (const auto& part : relative) {
+                if (part == "." || part == ".." || part.empty()) {
+                    throw std::runtime_error("local module path may not contain '.' or '..'");
+                }
+                for (const auto c : part.string()) {
+                    if (!identifier_char(c)) {
+                        throw std::runtime_error("local module path must contain identifier names");
+                    }
                 }
             }
+            module = load_module(canonical.parent_path() /
+                                     fs::path(relative.string() + ".su"),
+                                 canonical.parent_path(), loading, cache);
         }
-        auto module = load_module(canonical.parent_path() /
-                                      fs::path(relative.string() + ".su"),
-                                  canonical.parent_path(), loading, cache);
         if (!aliases.emplace(import.alias, module.exports).second) {
             throw std::runtime_error("duplicate local module alias '" + import.alias + "'");
         }
         math = math || module.math;
         memory = memory || module.memory;
         io = io || module.io;
+        sys = sys || module.sys;
         modules << module.source;
     }
 
@@ -391,6 +418,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     if (math) result << "import math\n";
     if (memory) result << "import memory\n";
     if (io) result << "import io\n";
+    if (sys) result << "import sys\n";
     result << modules.str() << rewritten_main;
     return result.str();
 }

@@ -840,6 +840,12 @@ private:
                                     {value.ast})));
             }
             if (name == "len" && accept("(")) return parse_len_call();
+            if ((name == "sum" || name == "all" || name == "any" ||
+                 name == "min" || name == "max" || name == "round") &&
+                signatures_.find(name) == signatures_.end() &&
+                accept("(")) {
+                return parse_builtin_call(name);
+            }
             if (name == "math" && accept(".")) {
                 if (peek().kind != Token::Kind::identifier) {
                     throw ParseError(line_, "expected a math function after 'math.'");
@@ -1370,6 +1376,82 @@ private:
             make_expression(Expression::Kind::literal, Type::boolean, result));
     }
 
+    ExprValue parse_builtin_call(const std::string& name) {
+        if (!allow_function_calls_) {
+            throw ParseError(line_, "default values cannot call functions");
+        }
+        std::vector<ExprValue> arguments;
+        if (!accept(")")) {
+            do {
+                arguments.push_back(parse_binary(1));
+            } while (accept(","));
+            if (!accept(")")) {
+                throw ParseError(line_, "expected ')' after " + name + " arguments");
+            }
+        }
+        const auto expected = name == "round" || name == "sum" ||
+                                      name == "all" || name == "any"
+                                  ? 1U : 2U;
+        if (arguments.size() != expected) {
+            throw ParseError(line_, name + " expects " + std::to_string(expected) +
+                                        " argument(s), got " +
+                                        std::to_string(arguments.size()));
+        }
+
+        if (name == "sum") {
+            const auto list_type = arguments[0].type;
+            if (!is_list_type(list_type) ||
+                (list_item_type(list_type) != Type::integer &&
+                 list_item_type(list_type) != Type::number)) {
+                throw ParseError(line_, "sum() requires a list[int] or list[number]");
+            }
+            const auto item_type = list_item_type(list_type);
+            const auto helper = item_type == Type::integer ? "sun_sum_int" : "sun_sum_number";
+            return make_expr_value(
+                item_type, std::string(helper) + "(" + arguments[0].cpp + ")",
+                make_expression(Expression::Kind::call, item_type, helper,
+                                {arguments[0].ast}));
+        }
+
+        if (name == "all" || name == "any") {
+            if (arguments[0].type != Type::list_boolean) {
+                throw ParseError(line_, name + "() requires a list[bool]");
+            }
+            const auto helper = name == "all" ? "sun_all" : "sun_any";
+            return make_expr_value(
+                Type::boolean, std::string(helper) + "(" + arguments[0].cpp + ")",
+                make_expression(Expression::Kind::call, Type::boolean, helper,
+                                {arguments[0].ast}));
+        }
+
+        if (!is_numeric(arguments[0].type) ||
+            (expected == 2 && !is_numeric(arguments[1].type))) {
+            throw ParseError(line_, name + "() requires number or int arguments");
+        }
+
+        if (name == "round") {
+            return make_expr_value(
+                Type::number, "std::round(" + as_number(arguments[0]) + ")",
+                make_expression(Expression::Kind::call, Type::number, "std::round",
+                                {as_number_expression(arguments[0])}));
+        }
+
+        const auto helper = name == "min" ? "sun_min" : "sun_max";
+        const bool preserve_integer = arguments[0].type == Type::integer &&
+                                      arguments[1].type == Type::integer;
+        const auto result_type = preserve_integer ? Type::integer : Type::number;
+        const auto left = preserve_integer ? arguments[0].cpp : as_number(arguments[0]);
+        const auto right = preserve_integer ? arguments[1].cpp : as_number(arguments[1]);
+        const auto left_ast = preserve_integer ? arguments[0].ast
+                                               : as_number_expression(arguments[0]);
+        const auto right_ast = preserve_integer ? arguments[1].ast
+                                                 : as_number_expression(arguments[1]);
+        return make_expr_value(
+            result_type, std::string(helper) + "(" + left + ", " + right + ")",
+            make_expression(Expression::Kind::call, result_type, helper,
+                            {left_ast, right_ast}));
+    }
+
     ExprValue parse_memory_call(const std::string& name) {
         if (!memory_imported_) throw ParseError(line_, "memory functions require 'import memory'");
         if (!allow_function_calls_) {
@@ -1462,6 +1544,36 @@ private:
         std::vector<std::string> parts;
         std::vector<Expression> expressions;
         std::string literal;
+        const auto interpolation_end = [&](std::size_t open) {
+            std::size_t parentheses = 0;
+            std::size_t brackets = 0;
+            std::size_t braces = 0;
+            bool in_string = false;
+            bool escaped = false;
+            for (std::size_t position = open + 1; position < text.size(); ++position) {
+                const auto c = text[position];
+                if (in_string) {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') in_string = false;
+                    continue;
+                }
+                if (c == '"') {
+                    in_string = true;
+                    continue;
+                }
+                if (c == '(') ++parentheses;
+                else if (c == ')' && parentheses > 0) --parentheses;
+                else if (c == '[') ++brackets;
+                else if (c == ']' && brackets > 0) --brackets;
+                else if (c == '{') ++braces;
+                else if (c == '}') {
+                    if (braces > 0) --braces;
+                    else if (parentheses == 0 && brackets == 0) return position;
+                }
+            }
+            return std::string::npos;
+        };
         auto flush_literal = [&]() {
             if (literal.empty()) return;
             parts.push_back("std::string(" + cpp_string(literal) + ")");
@@ -1477,30 +1589,28 @@ private:
                     continue;
                 }
                 flush_literal();
-                const auto close = text.find('}', i + 1);
+                const auto close = interpolation_end(i);
                 if (close == std::string::npos) {
                     throw ParseError(line_, "missing '}' in f-string interpolation");
                 }
-                const auto name = text.substr(i + 1, close - i - 1);
-                if (!is_identifier(name)) {
-                    throw ParseError(line_, "f-string interpolation must be a variable name");
+                const auto source = trim(text.substr(i + 1, close - i - 1));
+                if (source.empty()) {
+                    throw ParseError(line_, "f-string interpolation cannot be empty");
                 }
-                const auto found = symbols_.find(name);
-                if (found == symbols_.end()) {
-                    throw ParseError(line_, "unknown value '" + name + "'");
-                }
-                if (found->second.type == Type::region) {
+                auto value = ExpressionParser(
+                    source, line_, symbols_, math_imported_, memory_imported_, io_imported_,
+                    signatures_, types_, custom_types_, allow_function_calls_).parse();
+                if (value.type == Type::region) {
                     throw ParseError(line_, "memory regions cannot be interpolated as text");
                 }
-                if (found->second.type.kind == Type::Kind::custom &&
-                    !custom_types_.at(found->second.type.name).is_enum) {
+                if (value.type.kind == Type::Kind::custom &&
+                    !custom_types_.at(value.type.name).is_enum) {
                     throw ParseError(line_, "class and struct values cannot be interpolated directly");
                 }
-                parts.push_back("sun_to_string(" + found->second.cpp_name + ")");
+                parts.push_back("sun_to_string(" + value.cpp + ")");
                 expressions.push_back(make_expression(
                     Expression::Kind::call, Type::string, "sun_to_string",
-                    {make_expression(Expression::Kind::variable, found->second.type,
-                                     found->second.cpp_name)}));
+                    {value.ast}));
                 i = close + 1;
                 continue;
             }
@@ -1757,6 +1867,7 @@ public:
         bool seen_math = false;
         bool seen_memory = false;
         bool seen_io = false;
+        bool seen_sys = false;
         skip_ignored(index);
         while (index < lines_.size() && starts_word(lines_[index].text, "import")) {
             const auto module = trim(lines_[index].text.substr(6));
@@ -1772,9 +1883,13 @@ public:
                 if (seen_io) throw ParseError(lines_[index].number, "duplicate import 'io'");
                 seen_io = true;
                 result.io_imported = true;
+            } else if (module == "sys") {
+                if (seen_sys) throw ParseError(lines_[index].number, "duplicate import 'sys'");
+                seen_sys = true;
+                result.sys_imported = true;
             } else {
                 throw ParseError(lines_[index].number,
-                                 "supported imports are 'math', 'memory', and 'io'");
+                                 "supported imports are 'math', 'memory', 'io', and 'sys'");
             }
             ++index;
             skip_ignored(index);

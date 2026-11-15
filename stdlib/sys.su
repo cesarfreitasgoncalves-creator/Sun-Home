@@ -1,0 +1,56 @@
+inline cpp:
+#include <cstdlib>
+
+std::vector<std::string> sun_sys_arguments;
+
+void sun_sys_initialize(int argc, char** argv) {
+    sun_sys_arguments.clear();
+    for (int index = 1; index < argc; ++index) {
+        sun_sys_arguments.emplace_back(argv[index]);
+    }
+}
+
+std::string sun_sys_platform() {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#elif defined(__unix__)
+    return "unix";
+#else
+    return "unknown";
+#endif
+}
+
+void sun_sys_exit(std::int64_t code) {
+    if (code < std::numeric_limits<int>::min() ||
+        code > std::numeric_limits<int>::max()) {
+        throw std::runtime_error("sys.exit code is out of range for the host system");
+    }
+    std::exit(static_cast<int>(code));
+}
+endcpp
+
+func args(): list[string]
+    let result: list[string] = []
+    inline cpp:
+        result = sun_sys_arguments;
+    endcpp
+    return result
+end
+
+func platform(): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_platform();
+    endcpp
+    return result
+end
+
+func exit(code: int)
+    inline cpp:
+        sun_sys_exit(code);
+    endcpp
+end

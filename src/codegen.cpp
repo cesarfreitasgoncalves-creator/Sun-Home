@@ -394,6 +394,18 @@ std::int64_t sun_int_add(std::int64_t left, std::int64_t right) {
     return left + right;
 }
 
+std::int64_t sun_sum_int(const std::vector<std::int64_t>& values) {
+    std::int64_t total = 0;
+    for (const auto value : values) total = sun_int_add(total, value);
+    return total;
+}
+
+double sun_sum_number(const std::vector<double>& values) {
+    double total = 0.0;
+    for (const auto value : values) total += value;
+    return total;
+}
+
 std::int64_t sun_int_sub(std::int64_t left, std::int64_t right) {
     if ((right < 0 && left > std::numeric_limits<std::int64_t>::max() + right) ||
         (right > 0 && left < std::numeric_limits<std::int64_t>::min() + right))
@@ -432,6 +444,34 @@ std::int64_t sun_int_neg(std::int64_t value) {
     if (value == std::numeric_limits<std::int64_t>::min())
         throw SunRuntimeError("int arithmetic overflow");
     return -value;
+}
+
+template <typename T>
+T sun_min(T left, T right) {
+    if constexpr (std::is_floating_point_v<T>) {
+        if (std::isnan(left) || std::isnan(right)) {
+            return std::numeric_limits<T>::quiet_NaN();
+        }
+    }
+    return left <= right ? left : right;
+}
+
+template <typename T>
+T sun_max(T left, T right) {
+    if constexpr (std::is_floating_point_v<T>) {
+        if (std::isnan(left) || std::isnan(right)) {
+            return std::numeric_limits<T>::quiet_NaN();
+        }
+    }
+    return left >= right ? left : right;
+}
+
+bool sun_all(const std::vector<bool>& values) {
+    return std::all_of(values.begin(), values.end(), [](bool value) { return value; });
+}
+
+bool sun_any(const std::vector<bool>& values) {
+    return std::any_of(values.begin(), values.end(), [](bool value) { return value; });
 }
 
 template <typename T>
@@ -748,8 +788,14 @@ private:
         }
         out << ") {\n" << render_block(function.body, 4) << "}\n\n";
     }
-    out << "int main() {\n"
-        << "    try {\n" << render_block(program.main_body, 8)
+    if (program.sys_imported) {
+        out << "int main(int argc, char** argv) {\n";
+    } else {
+        out << "int main() {\n";
+    }
+    out << "    try {\n";
+    if (program.sys_imported) out << "        sun_sys_initialize(argc, argv);\n";
+    out << render_block(program.main_body, 8)
         << "        return 0;\n"
         << "    } catch (const std::exception& error) {\n"
         << "        std::cerr << \"Sun runtime error: \" << error.what() << '\\n';\n"

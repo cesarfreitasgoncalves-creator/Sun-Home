@@ -243,6 +243,7 @@ struct Program {
     bool math_imported = false;
     bool memory_imported = false;
     bool io_imported = false;
+    bool sys_imported = false;
 };
 
 Program parse(std::istream& source);

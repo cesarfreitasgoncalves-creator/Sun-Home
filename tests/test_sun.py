@@ -298,8 +298,15 @@ class SunCompilerTests(unittest.TestCase):
     def test_f_strings_interpolate_parameters_and_escape_braces(self):
         result = self.invoke(
             "f-string.su",
+            "func double(value: number): number\n"
+            "    return value * 2\n"
+            "end\n"
             'func greet(name)\n'
+            "    let count: int = int(3)\n"
+            "    let items: list[int] = [int(7)]\n"
             '    print(f"Hello, {name}! {{welcome}}" + " again")\n'
+            '    print(f"count={count + int(1)}, double={double(2.5)}, item={items[0]}")\n'
+            '    print(f"brace={char(\\"}\\")}")\n'
             'end\n'
             'greet("Sun")\n',
             "--compile",
@@ -313,7 +320,19 @@ class SunCompilerTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
-        self.assertEqual(executable.stdout, "Hello, Sun! {welcome} again\n")
+        self.assertEqual(
+            executable.stdout,
+            "Hello, Sun! {welcome} again\ncount=4, double=5, item=7\nbrace=}\n",
+        )
+
+    def test_f_string_reports_errors_in_embedded_expressions(self):
+        result = self.invoke(
+            "f-string-expression-error.su",
+            'print(f"value={missing + 1}")\n',
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown value 'missing'", result.stderr)
 
     def test_formatted_print_substitutes_values_and_escaped_percent(self):
         result = self.invoke(
@@ -717,6 +736,54 @@ class SunCompilerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("math functions require 'import math'", result.stderr)
 
+    def test_numeric_and_boolean_collection_builtins(self):
+        result = self.invoke(
+            "builtins.su",
+            "let integers: list[int] = [int(-4), int(7), int(2)]\n"
+            "let numbers: list[number] = [1.5, 2.5]\n"
+            "let flags: list[bool] = [true, false]\n"
+            "let no_flags: list[bool] = []\n"
+            "let no_integers: list[int] = []\n"
+            "print(sum(integers))\n"
+            "print(sum(numbers))\n"
+            "print(sum(no_integers))\n"
+            "print(sum([int(1), int(2)]))\n"
+            "print(all(flags))\n"
+            "print(all(no_flags))\n"
+            "print(all([true, true]))\n"
+            "print(any(flags))\n"
+            "print(any(no_flags))\n"
+            "print(any([false, true]))\n"
+            "print(min(int(-3), 2))\n"
+            "print(max(int(4), 4.5))\n"
+            "print(round(2.5))\n"
+            "print(round(-2.5))\n"
+            "print(min(0 / 0, 1))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "builtins")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "5\n4\n0\n3\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\n-3\n4.5\n3\n-3\nnan\n",
+        )
+
+    def test_builtins_reject_incompatible_collection_types(self):
+        result = self.invoke(
+            "builtin-type-error.su",
+            'let words: list[string] = ["hello"]\nprint(sum(words))\n',
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sum() requires a list[int] or list[number]", result.stderr)
+
     def test_memory_regions_are_bounded_shared_and_typed(self):
         result = self.invoke(
             "memory.su",
@@ -1022,6 +1089,57 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "false\n")
+
+    def test_sys_standard_module_exposes_platform_args_and_exit(self):
+        result = self.invoke(
+            "sys-module.su",
+            "import sys\n"
+            "print(sys.args())\n"
+            "print(sys.platform())\n"
+            "sys.exit(int(7))\n"
+            'print("unreachable")\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "sys-module"), "first", "two words"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 7, executable.stderr)
+        self.assertEqual(executable.stdout.splitlines()[0], "[first, two words]")
+        self.assertIn(
+            executable.stdout.splitlines()[1],
+            {"linux", "windows", "macos", "unix", "unknown"},
+        )
+        self.assertNotIn("unreachable", executable.stdout)
+
+    def test_local_modules_can_import_sys_stdlib(self):
+        (WORK / "cli_tools.su").write_text(
+            "import sys\n"
+            "func arguments(): list[string]\n"
+            "    return sys.args()\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "sys-local-module.su",
+            "import local/cli_tools as cli\n"
+            "print(cli.arguments())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "sys-local-module"), "payload"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "[payload]\n")
 
     def test_structs_enums_and_simple_classes(self):
         result = self.invoke(

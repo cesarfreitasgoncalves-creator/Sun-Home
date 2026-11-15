@@ -117,18 +117,21 @@ end
 
 ### F-strings
 
-Coloque `f` antes das aspas e o nome de um parametro ou variavel local entre
-chaves:
+Coloque `f` antes das aspas e escreva expressoes Sun entre chaves:
 
 ```sun
 func mostrar(nome)
     print(f"Ola, {nome}!")
+    print(f"2 + 3 = {2 + 3}")
     print(f"Chaves literais: {{ e }}")
 end
 ```
 
-As chaves duplas `{{` e `}}` representam chaves literais. A interpolacao aceita
-nomes de valores, mas nao expressoes arbitrarias dentro das chaves.
+As expressoes interpoladas usam as regras normais de tipos e podem conter
+operacoes, chamadas de funcao e acesso a itens. O resultado e convertido para
+texto. Regioes de memoria e valores de classes/structs nao podem ser
+interpolados diretamente. As chaves duplas `{{` e `}}` representam chaves
+literais.
 
 ### Marcador `%v`
 
@@ -254,6 +257,17 @@ ou fora do intervalo geram erro de runtime. `clear()` esvazia a lista.
 `len` aceita listas e strings. Listas podem ser passadas e retornadas de
 funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
 aninhadas, listas de `region` e listas de tuplas nao sao suportadas.
+
+### Funcoes integradas para colecoes e numeros
+
+`sum(lista)` soma listas de `int` ou `number`; listas tipadas vazias resultam em
+zero, e a soma de `int` detecta overflow. `all(lista_bool)` retorna `true`
+quando todos os itens sao verdadeiros (inclusive para lista vazia), enquanto
+`any(lista_bool)` retorna `true` quando pelo menos um item e verdadeiro.
+`min(a, b)` e `max(a, b)` comparam numeros; argumentos mistos `int`/`number`
+resultam em `number`, e valores `NaN` fazem o resultado ser `NaN`.
+`round(valor)` arredonda para o inteiro mais proximo, retornando `number`; empates
+como `2.5` e `-2.5` arredondam para longe de zero.
 
 ### Dicionarios
 
@@ -449,6 +463,24 @@ O alias entre parenteses e opcional. Modulos locais podem importar outros
 modulos locais; ciclos sao reportados como erro. Por enquanto, eles exportam
 funcoes e blocos `inline cpp` globais. Instrucoes executaveis no nivel superior
 de um modulo nao sao aceitas.
+
+## Biblioteca `sys`
+
+`import sys` carrega o primeiro modulo da biblioteca padrao, escrito em
+`stdlib/sys.su` e implementado com funcoes Sun e `inline cpp`:
+
+```sun
+import sys
+
+print(sys.args())
+print(sys.platform())
+sys.exit(int(0))
+```
+
+`sys.args()` retorna uma lista com os argumentos passados ao executavel,
+excluindo o nome do executavel. `sys.platform()` retorna `windows`, `macos`,
+`linux`, `unix` ou `unknown`. `sys.exit(code)` encerra o processo com um codigo
+de saida que precisa caber no tipo `int` do sistema.
 
 ### Structs, enums e classes simples
 

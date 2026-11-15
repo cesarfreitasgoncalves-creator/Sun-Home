@@ -32,10 +32,12 @@ em [HOWUSE.md](HOWUSE.md).
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
+- `sum`, `all`, `any`, `min`, `max` e `round` como funcoes integradas tipadas.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
   verificacao de bounds para leitura e escrita.
 - `import io` para leitura, escrita, append e verificacao de arquivos.
+- `import sys` para argumentos do executavel, identificacao da plataforma e saida.
 - Imports de modulos locais com alias, structs, enums e classes simples com
   campos, metodos e `init`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.

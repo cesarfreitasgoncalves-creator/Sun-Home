@@ -16,10 +16,14 @@ em [HOWUSE.md](HOWUSE.md).
 
 ## Recursos atuais
 
-- Funcoes com parametros tipados (`string`, `number`, `bool`, `region`) e blocos `end`.
+- Funcoes com parametros tipados (`string`, `number`, `bool`, `int`, `char`,
+  listas e `region`) e blocos `end`.
 - Chamadas de funcao e `print(...)`.
 - Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
+- Listas homogeneas tipadas, indexacao, `append`, `len` e `for` sobre listas.
+- `input(prompt, tipo)` para leitura tipada e `try`/`catch` para erros de runtime Sun.
+- Inteiros assinados de 64 bits com conversoes verificadas e tipo `char` de um byte.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
@@ -31,8 +35,8 @@ em [HOWUSE.md](HOWUSE.md).
   `print("Ola, %v", %v=nome)`.
 - Erros de compilacao com numero da linha, sem saida colorida obrigatoria.
 
-Sun ainda esta em prototipo: nao oferece colecoes, entrada interativa,
-funcoes aninhadas ou comentarios no fim de uma linha.
+Sun ainda esta em prototipo: structs, enums, funcoes aninhadas e comentarios no
+fim de uma linha ainda nao sao suportados.
 
 O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
 [HOWUSE.md](HOWUSE.md) para detalhes, exemplos e regras do C++ inline.

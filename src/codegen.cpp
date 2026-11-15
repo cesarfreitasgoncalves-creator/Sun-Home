@@ -23,10 +23,130 @@ std::string indent_statements(const std::vector<std::string>& statements, std::s
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <sstream>\n"
-           "#include <stdexcept>\n#include <string>\n";
+    out << "#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <limits>\n"
+           "#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
+           "#include <string>\n#include <utility>\n#include <vector>\n";
+    out << R"cpp(
+class SunRuntimeError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+std::string sun_input_string(const std::string& prompt) {
+    std::cout << prompt << std::flush;
+    std::string value;
+    if (!std::getline(std::cin, value)) throw SunRuntimeError("input could not read a line");
+    return value;
+}
+
+double sun_input_number(const std::string& prompt) {
+    const auto text = sun_input_string(prompt);
+    std::istringstream input(text);
+    double value = 0.0;
+    if (!(input >> value)) throw SunRuntimeError("input expected a number");
+    input >> std::ws;
+    if (!input.eof()) throw SunRuntimeError("input expected a number");
+    return value;
+}
+
+std::int64_t sun_input_int(const std::string& prompt) {
+    const auto text = sun_input_string(prompt);
+    std::istringstream input(text);
+    std::int64_t value = 0;
+    if (!(input >> value)) throw SunRuntimeError("input expected an int");
+    input >> std::ws;
+    if (!input.eof()) throw SunRuntimeError("input expected an int");
+    return value;
+}
+
+bool sun_input_bool(const std::string& prompt) {
+    const auto value = sun_input_string(prompt);
+    if (value == "true") return true;
+    if (value == "false") return false;
+    throw SunRuntimeError("input expected 'true' or 'false'");
+}
+
+char sun_input_char(const std::string& prompt) {
+    const auto value = sun_input_string(prompt);
+    if (value.size() != 1) throw SunRuntimeError("input expected one single-byte character");
+    return value[0];
+}
+
+char sun_to_char(const std::string& value) {
+    if (value.size() != 1) throw SunRuntimeError("char() requires a one-byte string");
+    return value[0];
+}
+
+std::int64_t sun_to_int(double value) {
+    const auto wide = static_cast<long double>(value);
+    if (!std::isfinite(value) || std::floor(value) != value ||
+        wide < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
+        wide > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+        throw SunRuntimeError("int() requires an in-range whole number");
+    return static_cast<std::int64_t>(value);
+}
+
+std::int64_t sun_int_add(std::int64_t left, std::int64_t right) {
+    if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
+        (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
+        throw SunRuntimeError("int arithmetic overflow");
+    return left + right;
+}
+
+std::int64_t sun_int_sub(std::int64_t left, std::int64_t right) {
+    if ((right < 0 && left > std::numeric_limits<std::int64_t>::max() + right) ||
+        (right > 0 && left < std::numeric_limits<std::int64_t>::min() + right))
+        throw SunRuntimeError("int arithmetic overflow");
+    return left - right;
+}
+
+std::int64_t sun_int_mul(std::int64_t left, std::int64_t right) {
+    if (left != 0 && right != 0) {
+        const auto min = std::numeric_limits<std::int64_t>::min();
+        const auto max = std::numeric_limits<std::int64_t>::max();
+        if ((left == -1 && right == min) || (right == -1 && left == min) ||
+            (left > 0 && ((right > 0 && left > max / right) ||
+                          (right < 0 && right < min / left))) ||
+            (left < 0 && ((right > 0 && left < min / right) ||
+                          (right < 0 && left < max / right))))
+            throw SunRuntimeError("int arithmetic overflow");
+    }
+    return left * right;
+}
+
+std::int64_t sun_int_div(std::int64_t left, std::int64_t right) {
+    if (right == 0) throw SunRuntimeError("int division by zero");
+    if (left == std::numeric_limits<std::int64_t>::min() && right == -1)
+        throw SunRuntimeError("int arithmetic overflow");
+    return left / right;
+}
+
+std::int64_t sun_int_mod(std::int64_t left, std::int64_t right) {
+    if (right == 0) throw SunRuntimeError("int modulo by zero");
+    if (left == std::numeric_limits<std::int64_t>::min() && right == -1) return 0;
+    return left % right;
+}
+
+std::int64_t sun_int_neg(std::int64_t value) {
+    if (value == std::numeric_limits<std::int64_t>::min())
+        throw SunRuntimeError("int arithmetic overflow");
+    return -value;
+}
+
+template <typename T>
+decltype(auto) sun_list_at(std::vector<T>& values, double index) {
+    if (!std::isfinite(index) || index < 0.0 || std::floor(index) != index ||
+        index >= static_cast<double>(values.size()))
+        throw SunRuntimeError("list index out of bounds or not a non-negative integer");
+    return values[static_cast<std::size_t>(index)];
+}
+
+template <typename T>
+void sun_list_append(std::vector<T>& values, T value) {
+    values.push_back(std::move(value));
+}
+)cpp";
     if (program.memory_imported) {
-        out << "#include <memory>\n#include <utility>\n#include <vector>\n";
         out << R"cpp(
 class SunMemoryRegion {
 public:
@@ -34,7 +154,7 @@ public:
         if (!std::isfinite(requested_size) || requested_size < 0.0 ||
             std::floor(requested_size) != requested_size ||
             requested_size > static_cast<double>(max_region_size)) {
-            throw std::runtime_error("memory.alloc size must be an integer from 0 to 67108864");
+            throw SunRuntimeError("memory.alloc size must be an integer from 0 to 67108864");
         }
         return SunMemoryRegion(
             std::make_shared<std::vector<std::uint8_t>>(
@@ -52,7 +172,7 @@ public:
     void write_u8(double offset, double value) {
         if (!std::isfinite(value) || value < 0.0 || value > 255.0 ||
             std::floor(value) != value) {
-            throw std::runtime_error("memory.write_u8 value must be an integer from 0 to 255");
+            throw SunRuntimeError("memory.write_u8 value must be an integer from 0 to 255");
         }
         (*bytes_)[checked_offset(offset)] = static_cast<std::uint8_t>(value);
     }
@@ -65,10 +185,10 @@ private:
 
     std::size_t checked_offset(double offset) const {
         if (!std::isfinite(offset) || offset < 0.0 || std::floor(offset) != offset) {
-            throw std::runtime_error("memory offset must be a non-negative integer");
+            throw SunRuntimeError("memory offset must be a non-negative integer");
         }
         if (offset >= static_cast<double>(bytes_->size())) {
-            throw std::runtime_error("memory offset out of bounds");
+            throw SunRuntimeError("memory offset out of bounds");
         }
         return static_cast<std::size_t>(offset);
     }
@@ -89,10 +209,21 @@ private:
            "    stream << std::boolalpha << value;\n"
            "    return stream.str();\n"
            "}\n\n"
+           "template <typename T>\n"
+           "std::string sun_to_string(const std::vector<T>& values) {\n"
+           "    std::ostringstream stream;\n"
+           "    stream << '[';\n"
+           "    for (std::size_t i = 0; i < values.size(); ++i) {\n"
+           "        if (i) stream << \", \";\n"
+           "        stream << std::boolalpha << values[i];\n"
+           "    }\n"
+           "    stream << ']';\n"
+           "    return stream.str();\n"
+           "}\n\n"
            "double sun_range_next(double value, double step) {\n"
            "    const double next = value + step;\n"
            "    if (next == value) {\n"
-           "        throw std::runtime_error(\"range step does not advance number\");\n"
+           "        throw SunRuntimeError(\"range step does not advance number\");\n"
            "    }\n"
            "    return next;\n"
            "}\n\n";

@@ -9,7 +9,20 @@
 
 namespace sun {
 
-enum class Type { string, number, boolean, region };
+enum class Type {
+    string,
+    number,
+    boolean,
+    region,
+    integer,
+    character,
+    list_number,
+    list_integer,
+    list_string,
+    list_boolean,
+    list_character,
+    empty_list
+};
 
 struct ParseError : std::runtime_error {
     ParseError(std::size_t line, const std::string& message)

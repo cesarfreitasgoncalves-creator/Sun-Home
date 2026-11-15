@@ -138,10 +138,11 @@ literal quando estiver usando argumentos formatados.
 
 ## 6. Numeros, operadores, condicoes e matematica
 
-Parametros podem declarar o tipo `string`, `number`, `bool` ou, com
-`import memory`, `region`. Parametros sem tipo continuam sendo `string` para
-manter compatibilidade com programas anteriores. Variaveis locais usam `let` e
-exigem tipo explicito:
+Parametros podem declarar `string`, `number`, `bool`, `int`, `char` e tipos de
+lista como `list[number]` ou `list[int]`; `region` continua dependendo de
+`import memory`. Parametros sem tipo continuam sendo `string` para manter
+compatibilidade com programas anteriores. Variaveis locais usam `let` e exigem
+tipo explicito:
 
 ```sun
 import math
@@ -174,18 +175,69 @@ end
 ```
 
 Operadores aritmeticos: `+`, `-`, `*`, `/` e `%` (resto). `+` tambem concatena
-duas strings. Comparacoes disponiveis: `==`, `!=`, `<`, `<=`, `>` e `>=`.
-Comparacoes ordenadas aceitam numeros; igualdade aceita dois valores do mesmo
-tipo. Condicoes de `if`/`elif` precisam resultar em `bool`, por exemplo uma
-comparacao, `true`/`false` ou um parametro booleano. Blocos `if` podem ter
-varios `elif` e um `else`; todo o conjunto termina com `end`.
+duas strings. `int` e um inteiro assinado de 64 bits: sua divisao trunca em
+direcao a zero e overflow ou divisao por zero geram erro em runtime.
+`int(numero)` converte apenas valores inteiros dentro do intervalo de `int`;
+`number(inteiro)` converte explicitamente para `number`, e `int` pode ser
+promovido a `number` em expressoes. `char` representa um byte; `char("A")`
+converte uma string de exatamente um byte.
+
+Comparacoes disponiveis: `==`, `!=`, `<`, `<=`, `>` e `>=`. Comparacoes
+ordenadas aceitam numeros; igualdade aceita valores do mesmo tipo e pares
+`int`/`number`. Condicoes de `if`/`elif` precisam resultar em `bool`, por
+exemplo uma comparacao, `true`/`false` ou um parametro booleano. Blocos `if`
+podem ter varios `elif` e um `else`; todo o conjunto termina com `end`.
 
 Operadores logicos `not`, `and` e `or` aceitam somente valores booleanos.
 `not` tem precedencia acima de `and`, que tem precedencia acima de `or`.
 `and` e `or` usam curto-circuito: a expressao da direita so e avaliada quando
 necessario.
 
-Loops usam condicoes booleanas e iteracao numerica por intervalo:
+### Entrada tipada
+
+`input(prompt, tipo)` mostra o prompt e le uma linha. Se o tipo for omitido,
+`input(prompt)` retorna `string` (tambem aceita o alias `str`). Para conversao,
+o tipo pode ser `number`, `int`, `bool` ou `char`. Valores invalidos geram erro
+de runtime:
+
+```sun
+let nome: string = input("Nome: ")
+let idade: int = input("Idade: ", int)
+let ativo: bool = input("Ativo (true/false): ", bool)
+let inicial: char = input("Inicial: ", char)
+print(f"{nome}: {idade}, ativo={ativo}, inicial={inicial}")
+```
+
+`bool` aceita exatamente `true` ou `false`; `char` aceita exatamente um byte.
+O prompt precisa ser uma expressao `string`.
+
+### Listas
+
+Listas sao homogeneas, de uma dimensao e devem declarar seu tipo:
+
+```sun
+let notas: list[number] = [8.5, 9.0]
+let valores: list[int] = []
+valores.append(int(12))
+valores.append(int(7))
+valores[0] = int(10)
+
+for valor in valores:
+    print(valor)
+end
+
+print(len(notas))
+```
+
+Os tipos de elemento aceitos sao `number`, `int`, `string`, `bool` e `char`.
+Indices comecam em zero; leitura e escrita fora dos limites, ou com indice
+negativo/fracionario, geram erro de runtime. `append` exige um item do mesmo
+tipo. `len` aceita listas e strings. Listas podem ser passadas e retornadas de
+funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
+aninhadas e listas de `region` nao sao suportadas.
+
+Loops usam condicoes booleanas, iteracao por lista e iteracao numerica por
+intervalo:
 
 ```sun
 let i: number = 0
@@ -206,8 +258,8 @@ execucao. Um passo que nao consegue avancar o valor atual tambem gera erro,
 evitando loop infinito por precisao de ponto flutuante. Os valores de `range`
 sao `number` (`double`), nao inteiros.
 
-Funcoes podem declarar retorno com `: tipo` no cabecalho, usando `string`,
-`number`, `bool` ou `region` (com `import memory`). Sem anotacao, a funcao
+Funcoes podem declarar retorno com `: tipo` no cabecalho, usando tipos escalares
+ou listas suportados (e `region` com `import memory`). Sem anotacao, a funcao
 retorna `void`. Todo caminho de uma funcao com retorno tipado deve retornar um
 valor do tipo declarado:
 
@@ -241,7 +293,8 @@ funcoes. Ao chamar a funcao, pode-se omitir qualquer sufixo de parametros que
 tenha default.
 
 `istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
-`number`, `bool` ou `region` (que requer `import memory`) e devolve `bool`:
+`number`, `bool`, `int`, `char` ou `region` (que requer `import memory`) e
+devolve `bool`:
 
 ```sun
 let idade: number = 20
@@ -346,11 +399,12 @@ print("Ola!")
 
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
-numeros, booleanos, operadores aritmeticos, de comparacao e logicos, f-strings,
-`%v`, `if`/`elif`/`else`, loops `while` e `for` por `range`, retornos tipados,
-as bibliotecas `math` e `memory`, `istype`, parametros com valores padrao e C++ inline.
-Ainda nao ha listas, entrada interativa, funcoes aninhadas ou comentarios no
-fim de uma linha.
+numeros, `int`, `char`, listas homogeneas, entrada tipada com `input`, operadores
+aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
+loops `while`, `for` por `range` e `for` por lista, retornos tipados,
+`try`/`catch` para erros de runtime Sun, as bibliotecas `math` e `memory`,
+`istype`, parametros com valores padrao e C++ inline. Ainda nao ha structs,
+enums, funcoes aninhadas ou comentarios no fim de uma linha.
 
 ## 10. Erros e acessibilidade
 
@@ -366,6 +420,21 @@ As mensagens sao texto simples, sem depender de cores, e os erros vao para
 ferramentas assistivas. Use `-h` ou `--help` para consultar as opcoes sem
 precisar memoriza-las. A indentacao consistente e nomes descritivos ajudam a
 manter os exemplos faceis de navegar.
+
+Use `try`/`catch nome:` para capturar erros de runtime produzidos por Sun
+(por exemplo, conversao ou indice invalido). O nome do `catch` recebe a
+mensagem como `string`:
+
+```sun
+try:
+    let idade: int = input("Idade: ", int)
+catch erro:
+    print(f"Entrada invalida: {erro}")
+end
+```
+
+`catch` nao captura erros de sintaxe/tipo da compilacao nem excecoes arbitrarias
+de C++ inline.
 
 Problemas comuns:
 

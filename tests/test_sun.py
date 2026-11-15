@@ -571,6 +571,184 @@ class SunCompilerTests(unittest.TestCase):
                 self.assertEqual(executable.returncode, 1)
                 self.assertIn(expected_error, executable.stderr)
 
+    def test_typed_lists_indexing_append_iteration_and_empty_initialization(self):
+        result = self.invoke(
+            "lists.su",
+            "func total(values: list[int]): int\n"
+            "    let result: int = int(0)\n"
+            "    for value in values:\n"
+            "        result = result + value\n"
+            "    end\n"
+            "    return result\n"
+            "end\n"
+            "func identity(values: list[int]): list[int]\n"
+            "    return values\n"
+            "end\n"
+            "let values: list[int] = []\n"
+            "values.append(int(4))\n"
+            "values.append(int(5))\n"
+            "values[0] = values[0] + int(1)\n"
+            "let flags: list[bool] = [true, false]\n"
+            "flags[1] = true\n"
+            'let message: string = "array[index] and list.append("\n'
+            'print("items=%v total=%v length=%v", %v=values, %v=total(identity(values)), %v=len(values))\n'
+            "print(flags)\n"
+            "print(message)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "lists")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "items=[5, 5] total=10 length=2\n[true, true]\n"
+            "array[index] and list.append(\n",
+        )
+
+    def test_lists_reject_mixed_items_and_check_indexes_at_runtime(self):
+        mixed = self.invoke("mixed-list.su", 'let values: list[int] = [int(1), "two"]\n')
+        self.assertNotEqual(mixed.returncode, 0)
+        self.assertIn("list items must all have the same type", mixed.stderr)
+
+        result = self.invoke(
+            "list-bounds.su",
+            "let values: list[number] = [3]\n"
+            "print(values[-1])\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "list-bounds")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 1)
+        self.assertIn("list index out of bounds", executable.stderr)
+
+    def test_typed_input_and_runtime_catch(self):
+        result = self.invoke(
+            "input-catch.su",
+            "let name: string = input(\"name? \")\n"
+            "let amount: int = input(\"amount? \", int)\n"
+            "let enabled: bool = input(\"enabled? \", bool)\n"
+            "let initial: char = input(\"initial? \", char)\n"
+            "let ratio: number = input(\"ratio? \", number)\n"
+            "print(f\"{name} {amount} {enabled} {initial} {ratio}\")\n"
+            "try:\n"
+            "    let invalid: int = int(2.5)\n"
+            "catch e:\n"
+            '    print(f"caught: {e}")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "input-catch")],
+            cwd=ROOT,
+            input="Sun\n7\ntrue\nS\n1.5\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "name? amount? enabled? initial? ratio? Sun 7 true S 1.5\n"
+            "caught: int() requires an in-range whole number\n",
+        )
+
+    def test_input_accepts_str_as_string_type_alias(self):
+        result = self.invoke(
+            "input-str-alias.su",
+            'let name: str = input("Name: ", str)\n'
+            "print(name)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "input-str-alias")],
+            cwd=ROOT,
+            input="Sun\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Name: Sun\n")
+
+    def test_try_catches_input_errors_but_not_compile_errors(self):
+        result = self.invoke(
+            "input-error.su",
+            "try:\n"
+            '    let value: int = input("number? ", int)\n'
+            "catch error:\n"
+            '    print(f"invalid: {error}")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "input-error")],
+            cwd=ROOT,
+            input="not a number\n",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "number? invalid: input expected an int\n")
+
+        compile_error = self.invoke(
+            "try-compile-error.su",
+            "try:\n"
+            "    print(missing_value)\n"
+            "catch error:\n"
+            '    print("not reached")\n'
+            "end\n",
+        )
+        self.assertNotEqual(compile_error.returncode, 0)
+        self.assertIn("unknown value 'missing_value'", compile_error.stderr)
+
+    def test_int_math_conversions_and_char_type(self):
+        result = self.invoke(
+            "integer-char.su",
+            "let first: int = int(7)\n"
+            "let second: int = int(2)\n"
+            "let quotient: int = first / second\n"
+            "let promoted: number = first + 0.5\n"
+            'let initial: char = char("A")\n'
+            "print(f\"{quotient} {promoted} {initial}\")\n"
+            "print(istype(first, int))\n"
+            "print(istype(initial, char))\n"
+            "try:\n"
+            "    let overflow: int = int(9223372036854774784.0) + int(2048)\n"
+            "catch error:\n"
+            '    print(error)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "integer-char")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "3 7.5 A\ntrue\ntrue\nint arithmetic overflow\n",
+        )
+
     def test_rejects_incompatible_static_types(self):
         result = self.invoke(
             "wrong-type.su",

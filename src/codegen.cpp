@@ -2,6 +2,8 @@
 #include "stdlib_io.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <sstream>
 
 namespace sun {
@@ -43,7 +45,15 @@ std::string emit_expression(const Expression& expression) {
         return result.str();
     };
     switch (expression.kind) {
-    case Expression::Kind::literal: return expression.value;
+    case Expression::Kind::literal:
+        if (expression.type == Type::integer) {
+            const auto min = std::numeric_limits<std::int64_t>::min();
+            if (expression.value == std::to_string(min)) {
+                return "std::numeric_limits<std::int64_t>::min()";
+            }
+            return "std::int64_t{" + expression.value + "}";
+        }
+        return expression.value;
     case Expression::Kind::string_literal:
         return "std::string(" + cpp_string(expression.value) + ")";
     case Expression::Kind::variable: return expression.value;
@@ -114,6 +124,9 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* print = std::get_if<PrintStatement>(&statement.node)) {
         out << prefix << "std::cout << sun_to_string(" << emit_expression(print->value)
             << ") << '\\n';\n";
+    } else if (const auto* assertion = std::get_if<AssertStatement>(&statement.node)) {
+        out << prefix << "if (!(" << emit_expression(assertion->condition)
+            << ")) throw SunRuntimeError(\"assertion failed\");\n";
     } else if (const auto* assignment =
                    std::get_if<DictionaryAssignmentStatement>(&statement.node)) {
         out << prefix << emit_expression(assignment->dictionary) << '['

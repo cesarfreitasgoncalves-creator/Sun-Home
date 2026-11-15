@@ -413,6 +413,69 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "seven\nlarge 8\nsmall\n")
 
+    def test_constant_expressions_are_folded_in_generated_cpp(self):
+        result = self.invoke(
+            "constant-folding.su",
+            "import math\n"
+            "print(int(2) + int(3) * int(4))\n"
+            "print(7 < 9)\n"
+            "print(math.sqrt(81))\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = (WORK / "constant-folding.cpp").read_text(encoding="utf-8")
+        self.assertIn("sun_to_string(std::int64_t{14})", generated)
+        self.assertIn("sun_to_string(true)", generated)
+        self.assertIn("sun_to_string(9.0)", generated)
+        main_body = generated.split("int main()", 1)[1]
+        self.assertNotIn("sun_int_mul", main_body)
+
+    def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
+        result = self.invoke(
+            "assertion.su",
+            "assert(1 < 2)\n"
+            "try:\n"
+            "    assert(false)\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "assertion")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "assertion failed\n")
+
+        invalid = self.invoke("assertion-type.su", "assert(1)\n", "--check")
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("assert condition must be bool", invalid.stderr)
+
+    def test_constant_folding_preserves_runtime_integer_division_errors(self):
+        result = self.invoke(
+            "constant-division-error.su",
+            "try:\n"
+            "    let value: int = int(8) / int(0)\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "constant-division-error")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "int division by zero\n")
+
     def test_numeric_precedence_fractional_division_and_nested_conditions(self):
         result = self.invoke(
             "operators.su",

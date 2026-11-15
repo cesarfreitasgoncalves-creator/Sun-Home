@@ -34,6 +34,7 @@ enum class Keyword {
     import_,
     end_,
     print_,
+    assert_,
     true_,
     false_,
     and_,
@@ -151,6 +152,10 @@ struct PrintStatement {
     Expression value;
 };
 
+struct AssertStatement {
+    Expression condition;
+};
+
 struct DictionaryAssignmentStatement {
     Expression dictionary;
     Expression key;
@@ -226,7 +231,7 @@ struct TryCatchStatement {
 
 struct Statement {
     using Node = std::variant<RawStatement, PrintStatement, DictionaryAssignmentStatement,
-                              IfStatement, MatchStatement, LocalFunctionStatement,
+                              AssertStatement, IfStatement, MatchStatement, LocalFunctionStatement,
                               WhileStatement, RangeForStatement,
                               ForEachStatement, TryCatchStatement>;
 

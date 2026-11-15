@@ -25,6 +25,7 @@ Keyword keyword_from_word(const std::string& word) {
     if (word == "import") return Keyword::import_;
     if (word == "end") return Keyword::end_;
     if (word == "print") return Keyword::print_;
+    if (word == "assert") return Keyword::assert_;
     if (word == "true") return Keyword::true_;
     if (word == "false") return Keyword::false_;
     if (word == "and") return Keyword::and_;

@@ -209,6 +209,14 @@ Operadores logicos `not`, `and` e `or` aceitam somente valores booleanos.
 `and` e `or` usam curto-circuito: a expressao da direita so e avaliada quando
 necessario.
 
+O compilador avalia expressoes constantes durante a compilacao, incluindo
+operacoes aritmeticas, comparacoes e algumas funcoes matematicas e integradas.
+Operacoes que podem falhar, como divisao por zero ou overflow de `int`, continuam
+no programa gerado para preservar o erro em runtime.
+
+Use `assert(condicao)` para verificar uma condicao `bool`. Se ela for falsa,
+gera o erro de runtime `assertion failed`, que pode ser tratado com `try`/`catch`.
+
 ### Entrada tipada
 
 `input(prompt, tipo)` mostra o prompt e le uma linha. Se o tipo for omitido,

@@ -5,9 +5,11 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -pedantic
 
 all: build/sun
 
-build/sun: src/sun.cpp
+SUN_SOURCES := src/main.cpp src/lexer.cpp src/parser.cpp src/codegen.cpp
+
+build/sun: $(SUN_SOURCES) src/compiler.hpp src/lexer.hpp
 	mkdir -p build
-	$(CXX) $(CXXFLAGS) $< -o $@
+	$(CXX) $(CXXFLAGS) $(SUN_SOURCES) -o $@
 
 test: build/sun
 	python3 -m unittest discover -s tests -v

@@ -1,0 +1,19 @@
+#pragma once
+
+#include "compiler.hpp"
+
+#include <string>
+#include <vector>
+
+namespace sun {
+
+struct Token {
+    enum class Kind { identifier, number, string, symbol, end };
+    Kind kind;
+    std::string text;
+    bool fstring = false;
+};
+
+std::vector<Token> tokenize(const std::string& source, std::size_t line);
+
+} // namespace sun

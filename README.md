@@ -20,6 +20,7 @@ em [HOWUSE.md](HOWUSE.md).
 - Chamadas de funcao e `print(...)`.
 - Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
+- Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
@@ -27,3 +28,6 @@ em [HOWUSE.md](HOWUSE.md).
 
 Sun ainda esta em prototipo: nao oferece loops, entrada interativa, atribuicao
 apos declaracao ou valores de retorno.
+
+O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
+[HOWUSE.md](HOWUSE.md) para detalhes, exemplos e regras do C++ inline.

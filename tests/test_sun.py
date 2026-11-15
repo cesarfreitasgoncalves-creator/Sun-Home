@@ -210,6 +210,40 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "enabled=true\nenabled=false\n")
 
+    def test_inline_cpp_global_and_function_blocks(self):
+        result = self.invoke(
+            "inline-cpp.su",
+            "inline cpp:\n"
+            "#include <cstdio>\n"
+            "static int sun_global_value = 40;\n"
+            "endcpp\n"
+            "func show(value: number)\n"
+            "    let next: number = value + 2\n"
+            "    if next == 42:\n"
+            "        inline cpp:\n"
+            '            std::cout << value << ":" << next << ":" << sun_global_value << "\\n";\n'
+            "        endcpp\n"
+            "    end\n"
+            "end\n"
+            "show(40)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "inline-cpp")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "40:42:40\n")
+
+    def test_inline_cpp_reports_missing_endcpp(self):
+        result = self.invoke("open-inline-cpp.su", 'inline cpp:\nstd::cout << "hi";\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("inline C++ block is missing 'endcpp'", result.stderr)
+
     def test_rejects_math_calls_without_import(self):
         result = self.invoke(
             "missing-math-import.su",

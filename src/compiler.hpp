@@ -1,0 +1,42 @@
+#pragma once
+
+#include <cstddef>
+#include <istream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace sun {
+
+enum class Type { string, number, boolean };
+
+struct ParseError : std::runtime_error {
+    ParseError(std::size_t line, const std::string& message)
+        : std::runtime_error(message), line(line) {}
+    std::size_t line;
+};
+
+struct Parameter {
+    std::string name;
+    Type type;
+};
+
+struct Function {
+    std::string name;
+    std::vector<Parameter> parameters;
+    std::vector<std::string> body;
+    std::size_t line;
+};
+
+struct Program {
+    std::vector<Function> functions;
+    std::vector<std::string> main_body;
+    std::vector<std::string> global_cpp;
+    bool math_imported = false;
+};
+
+Program parse(std::istream& source);
+std::string transpile(const Program& program);
+std::string cpp_type(Type type);
+
+} // namespace sun

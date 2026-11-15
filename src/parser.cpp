@@ -1,8 +1,8 @@
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
+#include "compiler.hpp"
+#include "lexer.hpp"
+
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -10,37 +10,18 @@
 #include <utility>
 #include <vector>
 
+namespace sun {
+
 namespace {
-
-namespace fs = std::filesystem;
-
-enum class Type { string, number, boolean };
-
-struct ParseError : std::runtime_error {
-    ParseError(std::size_t line, const std::string& message)
-        : std::runtime_error(message), line(line) {}
-    std::size_t line;
-};
 
 struct SourceLine {
     std::size_t number;
     std::string text;
-};
-
-struct Parameter {
-    std::string name;
-    Type type;
+    std::string raw_text;
 };
 
 struct Signature {
     std::vector<Type> parameters;
-};
-
-struct Function {
-    std::string name;
-    std::vector<Parameter> parameters;
-    std::vector<std::string> body;
-    std::size_t line;
 };
 
 struct Symbol {
@@ -80,6 +61,26 @@ bool is_identifier(const std::string& text) {
     return true;
 }
 
+bool is_cpp_identifier(const std::string& text) {
+    static const std::set<std::string> keywords = {
+        "alignas", "alignof", "and", "asm", "auto", "bool", "break", "case",
+        "catch", "char", "class", "const", "constexpr", "continue", "decltype",
+        "default", "delete", "do", "double", "else", "enum", "explicit",
+        "export", "extern", "false", "float", "for", "friend", "goto", "if",
+        "inline", "int", "long", "mutable", "namespace", "new", "noexcept",
+        "nullptr", "operator", "or", "private", "protected", "public", "register",
+        "return", "short", "signed", "sizeof", "static", "struct", "switch",
+        "template", "this", "thread_local", "throw", "true", "try", "typedef",
+        "typeid", "typename", "union", "unsigned", "using", "virtual", "void",
+        "volatile", "while", "xor", "std"
+    };
+    return is_identifier(text) && keywords.find(text) == keywords.end();
+}
+
+bool is_ignored(const SourceLine& line) {
+    return line.text.empty() || line.text[0] == '#';
+}
+
 bool starts_word(const std::string& text, const std::string& word) {
     return text == word ||
            (text.size() > word.size() && text.compare(0, word.size(), word) == 0 &&
@@ -92,15 +93,6 @@ Type parse_type(const std::string& name, std::size_t line) {
     if (name == "number") return Type::number;
     if (name == "bool") return Type::boolean;
     throw ParseError(line, "unknown type '" + name + "' (use string, number, or bool)");
-}
-
-std::string cpp_type(Type type) {
-    switch (type) {
-    case Type::string: return "std::string";
-    case Type::number: return "double";
-    case Type::boolean: return "bool";
-    }
-    throw std::logic_error("invalid Sun type");
 }
 
 std::vector<std::string> split_arguments(const std::string& text, std::size_t line) {
@@ -195,99 +187,6 @@ std::string cpp_string(const std::string& value) {
     }
     result << '"';
     return result.str();
-}
-
-struct Token {
-    enum class Kind { identifier, number, string, symbol, end };
-    Kind kind;
-    std::string text;
-    bool fstring = false;
-};
-
-std::vector<Token> tokenize(const std::string& source, std::size_t line) {
-    std::vector<Token> tokens;
-    std::size_t i = 0;
-    while (i < source.size()) {
-        const char c = source[i];
-        if (c == ' ' || c == '\t' || c == '\r') {
-            ++i;
-            continue;
-        }
-        const bool fstring = c == 'f' && i + 1 < source.size() && source[i + 1] == '"';
-        if (c == '"' || fstring) {
-            if (fstring) ++i;
-            ++i;
-            std::string value;
-            bool closed = false;
-            while (i < source.size()) {
-                char current = source[i++];
-                if (current == '"') {
-                    closed = true;
-                    break;
-                }
-                if (current == '\\') {
-                    if (i == source.size()) throw ParseError(line, "unterminated escape sequence");
-                    current = source[i++];
-                    switch (current) {
-                    case 'n': value.push_back('\n'); break;
-                    case 't': value.push_back('\t'); break;
-                    case 'r': value.push_back('\r'); break;
-                    case '\\': value.push_back('\\'); break;
-                    case '"': value.push_back('"'); break;
-                    default: throw ParseError(line, "unsupported escape sequence");
-                    }
-                } else {
-                    if (current == '\0') {
-                        throw ParseError(line, "NUL byte is not allowed in string literal");
-                    }
-                    value.push_back(current);
-                }
-            }
-            if (!closed) throw ParseError(line, "unterminated string literal");
-            tokens.push_back({Token::Kind::string, value, fstring});
-            continue;
-        }
-        if (is_identifier_start(c)) {
-            const auto start = i++;
-            while (i < source.size() && is_identifier_char(source[i])) ++i;
-            tokens.push_back({Token::Kind::identifier, source.substr(start, i - start)});
-            continue;
-        }
-        if (c >= '0' && c <= '9') {
-            const auto start = i++;
-            while (i < source.size() && source[i] >= '0' && source[i] <= '9') ++i;
-            if (i < source.size() && source[i] == '.') {
-                ++i;
-                while (i < source.size() && source[i] >= '0' && source[i] <= '9') ++i;
-            }
-            if (i < source.size() && (source[i] == 'e' || source[i] == 'E')) {
-                ++i;
-                if (i < source.size() && (source[i] == '+' || source[i] == '-')) ++i;
-                const auto exponent_start = i;
-                while (i < source.size() && source[i] >= '0' && source[i] <= '9') ++i;
-                if (i == exponent_start) throw ParseError(line, "malformed number exponent");
-            }
-            tokens.push_back({Token::Kind::number, source.substr(start, i - start)});
-            continue;
-        }
-
-        if (i + 1 < source.size()) {
-            const auto pair = source.substr(i, 2);
-            if (pair == "==" || pair == "!=" || pair == "<=" || pair == ">=") {
-                tokens.push_back({Token::Kind::symbol, pair});
-                i += 2;
-                continue;
-            }
-        }
-        if (std::string("+-*/%<>()=,.").find(c) != std::string::npos) {
-            tokens.push_back({Token::Kind::symbol, std::string(1, c)});
-            ++i;
-            continue;
-        }
-        throw ParseError(line, "unexpected character in expression");
-    }
-    tokens.push_back({Token::Kind::end, ""});
-    return tokens;
 }
 
 class ExpressionParser {
@@ -549,21 +448,15 @@ public:
         std::size_t number = 0;
         while (std::getline(source, text)) {
             ++number;
-            text = trim(text);
-            if (text.empty() || text[0] == '#') continue;
-            lines_.push_back({number, text});
+            const auto normalized = trim(text);
+            lines_.push_back({number, normalized, text});
         }
     }
 
-    struct Result {
-        std::vector<Function> functions;
-        std::vector<std::string> main_body;
-        bool math_imported = false;
-    };
-
-    Result parse() {
-        Result result;
+    Program parse() {
+        Program result;
         std::size_t index = 0;
+        skip_ignored(index);
         while (index < lines_.size() && starts_word(lines_[index].text, "import")) {
             if (lines_[index].text != "import math") {
                 throw ParseError(lines_[index].number, "only 'import math' is currently supported");
@@ -573,8 +466,21 @@ public:
             }
             result.math_imported = true;
             ++index;
+            skip_ignored(index);
         }
         for (std::size_t i = index; i < lines_.size(); ++i) {
+            if (is_ignored(lines_[i])) continue;
+            if (lines_[i].text == "inline cpp:") {
+                while (++i < lines_.size() && lines_[i].text != "endcpp") {}
+                if (i == lines_.size()) {
+                    throw ParseError(lines_.back().number + 1,
+                                     "inline C++ block is missing 'endcpp'");
+                }
+                continue;
+            }
+            if (lines_[i].text == "endcpp") {
+                throw ParseError(lines_[i].number, "'endcpp' without an open inline C++ block");
+            }
             if (starts_word(lines_[i].text, "import")) {
                 throw ParseError(lines_[i].number, "imports must appear before declarations and statements");
             }
@@ -592,12 +498,56 @@ public:
                 }
             }
         }
-        result.main_body = parse_main(index, result.math_imported);
+        result.main_body = parse_main(index, result.math_imported, result.global_cpp);
         result.functions = std::move(functions_);
         return result;
     }
 
 private:
+    std::string parse_inline_cpp(std::size_t& index, const Symbols& symbols,
+                                 bool global_scope = false) {
+        const auto start = lines_[index];
+        ++index;
+        std::ostringstream raw;
+        bool first = true;
+        while (index < lines_.size() && lines_[index].text != "endcpp") {
+            if (lines_[index].raw_text.find('\0') != std::string::npos) {
+                throw ParseError(lines_[index].number, "NUL byte is not allowed in inline C++");
+            }
+            if (!first) raw << '\n';
+            raw << lines_[index].raw_text;
+            first = false;
+            ++index;
+        }
+        if (index == lines_.size()) {
+            throw ParseError(start.number, "inline C++ block is missing 'endcpp'");
+        }
+        ++index;
+        if (global_scope) return raw.str();
+
+        for (const auto& entry : symbols) {
+            if (!is_cpp_identifier(entry.first)) {
+                throw ParseError(start.number,
+                                 "inline C++ cannot expose C++ reserved identifier '" +
+                                     entry.first + "'");
+            }
+            for (const auto& other : symbols) {
+                if (entry.first != other.first && entry.first == other.second.cpp_name) {
+                    throw ParseError(start.number,
+                                     "inline C++ alias '" + entry.first +
+                                         "' conflicts with an internal Sun name");
+                }
+            }
+        }
+        std::ostringstream code;
+        code << "{\n";
+        for (const auto& entry : symbols) {
+            code << "    auto& " << entry.first << " = " << entry.second.cpp_name << ";\n";
+        }
+        code << raw.str() << "\n}";
+        return code.str();
+    }
+
     Function parse_function_header(const SourceLine& line) {
         const auto header = trim(line.text.substr(4));
         if (header.empty()) throw ParseError(line.number, "expected 'func name(parameters)'");
@@ -625,10 +575,17 @@ private:
         return text == "end" || starts_word(text, "elif") || starts_word(text, "else");
     }
 
-    std::vector<std::string> parse_main(std::size_t& index, bool math_imported) {
+    void skip_ignored(std::size_t& index) const {
+        while (index < lines_.size() && is_ignored(lines_[index])) ++index;
+    }
+
+    std::vector<std::string> parse_main(std::size_t& index, bool math_imported,
+                                        std::vector<std::string>& global_cpp) {
         Symbols symbols;
         std::vector<std::string> body;
         while (index < lines_.size()) {
+            skip_ignored(index);
+            if (index == lines_.size()) break;
             if (lines_[index].text == "end") {
                 throw ParseError(lines_[index].number, "'end' without an open block");
             }
@@ -654,6 +611,10 @@ private:
                 functions_.push_back(std::move(function));
                 continue;
             }
+            if (lines_[index].text == "inline cpp:") {
+                global_cpp.push_back(parse_inline_cpp(index, symbols, true));
+                continue;
+            }
             body.push_back(parse_statement(index, symbols, math_imported));
         }
         return body;
@@ -662,7 +623,9 @@ private:
     std::vector<std::string> parse_block(std::size_t& index, Symbols& symbols,
                                          bool math_imported) {
         std::vector<std::string> body;
-        while (index < lines_.size() && !is_terminator(lines_[index].text)) {
+        while (index < lines_.size()) {
+            skip_ignored(index);
+            if (index == lines_.size() || is_terminator(lines_[index].text)) break;
             if (starts_word(lines_[index].text, "func")) {
                 throw ParseError(lines_[index].number, "nested function declarations are not supported");
             }
@@ -863,6 +826,10 @@ private:
     std::string parse_statement(std::size_t& index, Symbols& symbols, bool math_imported) {
         const auto line = lines_[index];
         const auto& text = line.text;
+        if (text == "inline cpp:") return parse_inline_cpp(index, symbols);
+        if (text == "endcpp") {
+            throw ParseError(line.number, "'endcpp' without an open inline C++ block");
+        }
         if (starts_word(text, "if")) return parse_if(index, symbols, math_imported);
         if (starts_word(text, "let")) {
             auto result = parse_let(line, symbols, math_imported);
@@ -888,148 +855,19 @@ private:
     std::vector<Function> functions_;
 };
 
-std::string transpile(const SunParser::Result& program) {
-    std::ostringstream out;
-    out << "#include <cmath>\n#include <iostream>\n#include <sstream>\n#include <string>\n";
-    out << "\nstd::string sun_to_string(const std::string& value) {\n"
-           "    return value;\n"
-           "}\n\n"
-           "template <typename T>\n"
-           "std::string sun_to_string(const T& value) {\n"
-           "    std::ostringstream stream;\n"
-           "    stream << std::boolalpha << value;\n"
-           "    return stream.str();\n"
-           "}\n\n";
-    for (const auto& function : program.functions) {
-        out << "void sun_fn_" << function.name << '(';
-        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << cpp_type(function.parameters[i].type);
-        }
-        out << ");\n";
-    }
-    if (!program.functions.empty()) out << '\n';
-    for (const auto& function : program.functions) {
-        out << "void sun_fn_" << function.name << '(';
-        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << cpp_type(function.parameters[i].type) << " sun_arg_"
-                << function.parameters[i].name;
-        }
-        out << ") {\n" << indent_statements(function.body, 4) << "}\n\n";
-    }
-    out << "int main() {\n" << indent_statements(program.main_body, 4)
-        << "    return 0;\n}\n";
-    return out.str();
-}
-
-std::string shell_quote(const std::string& value) {
-    std::string quoted = "'";
-    for (char c : value) {
-        if (c == '\'') quoted += "'\\''";
-        else quoted += c;
-    }
-    quoted += '\'';
-    return quoted;
-}
-
-struct Options {
-    fs::path source;
-    fs::path output;
-    bool compile = false;
-    bool compiler_explicit = false;
-    std::string compiler = "g++";
-};
-
-void print_usage(std::ostream& out) {
-    out << "Usage: sun <source.su> [-o <output.cpp>] [--compile] [--compiler <path>]\n";
-}
-
-Options parse_options(int argc, char** argv) {
-    if (argc == 2 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
-        print_usage(std::cout);
-        std::exit(0);
-    }
-    if (argc < 2) throw std::runtime_error("missing source file");
-    Options options;
-    options.source = argv[1];
-    options.output = options.source;
-    options.output.replace_extension(".cpp");
-    for (int i = 2; i < argc; ++i) {
-        const std::string argument = argv[i];
-        if (argument == "-o") {
-            if (++i >= argc) throw std::runtime_error("'-o' requires an output path");
-            options.output = argv[i];
-        } else if (argument == "--compile") {
-            options.compile = true;
-        } else if (argument == "--compiler") {
-            if (++i >= argc) throw std::runtime_error("'--compiler' requires a compiler path");
-            options.compiler = argv[i];
-            options.compiler_explicit = true;
-        } else if (argument == "-h" || argument == "--help") {
-            print_usage(std::cout);
-            std::exit(0);
-        } else {
-            throw std::runtime_error("unknown option '" + argument + "'");
-        }
-    }
-    if (options.source.extension() != ".su") {
-        throw std::runtime_error("source file must have the .su extension");
-    }
-    if (options.output == "-") {
-        if (options.compile) throw std::runtime_error("cannot compile when C++ output is sent to stdout");
-    } else if (fs::absolute(options.source).lexically_normal() ==
-               fs::absolute(options.output).lexically_normal()) {
-        throw std::runtime_error("C++ output path must not overwrite the source file");
-    }
-    return options;
-}
-
 } // namespace
 
-int main(int argc, char** argv) {
-    try {
-        const auto options = parse_options(argc, argv);
-        std::ifstream input(options.source);
-        if (!input) {
-            throw std::runtime_error("cannot open source file '" + options.source.string() + "'");
-        }
-        const auto program = SunParser(input).parse();
-        const auto generated = transpile(program);
-
-        if (options.output == "-") {
-            std::cout << generated;
-        } else {
-            std::ofstream output(options.output);
-            if (!output) {
-                throw std::runtime_error("cannot write C++ output '" + options.output.string() + "'");
-            }
-            output << generated;
-            if (!output) throw std::runtime_error("failed while writing C++ output");
-        }
-        if (options.compile) {
-            const char* environment_compiler = std::getenv("CXX");
-            const auto compiler = environment_compiler && !options.compiler_explicit
-                                      ? std::string(environment_compiler)
-                                      : options.compiler;
-            auto executable = options.source;
-            executable.replace_extension("");
-            const std::string command = shell_quote(compiler) + " -std=c++17 -Wall -Wextra -pedantic " +
-                                        shell_quote(options.output.string()) + " -o " +
-                                        shell_quote(executable.string());
-            const int result = std::system(command.c_str());
-            if (result != 0) {
-                throw std::runtime_error("C++ compilation failed (exit code " +
-                                         std::to_string(result) + ")");
-            }
-            std::cerr << "Compiled executable: " << executable.string() << '\n';
-        }
-        return 0;
-    } catch (const ParseError& error) {
-        std::cerr << "sun: line " << error.line << ": error: " << error.what() << '\n';
-    } catch (const std::exception& error) {
-        std::cerr << "sun: error: " << error.what() << '\n';
-        if (argc < 2) print_usage(std::cerr);
+std::string cpp_type(Type type) {
+    switch (type) {
+    case Type::string: return "std::string";
+    case Type::number: return "double";
+    case Type::boolean: return "bool";
     }
-    return 1;
+    throw std::logic_error("invalid Sun type");
 }
+
+Program parse(std::istream& source) {
+    return SunParser(source).parse();
+}
+
+} // namespace sun

@@ -1,7 +1,7 @@
 # Como usar a Sun
 
 Este guia mostra como compilar o compilador, transpilar um arquivo `.su`,
-gerar um executável e escrever programas com a sintaxe atualmente suportada.
+gerar um executavel e escrever programas com a sintaxe atualmente suportada.
 
 ## 1. Requisitos
 
@@ -24,6 +24,10 @@ O executavel do compilador fica em `build/sun`. Para ver as opcoes:
 ```sh
 build/sun --help
 ```
+
+O core esta dividido em `src/main.cpp` (CLI), `src/lexer.cpp` (tokens),
+`src/parser.cpp` (sintaxe e verificacao de tipos), `src/codegen.cpp` (geracao
+de C++) e `src/compiler.hpp` (tipos e interface entre os modulos).
 
 ## 3. Transpilar e compilar um programa
 
@@ -83,12 +87,6 @@ build/sun ola.su --compile
 ./ola
 ```
 
-Saida:
-
-```text
-Ola, mundo!
-```
-
 `func` inicia uma funcao e `end` encerra o bloco. A indentacao e recomendada
 para facilitar a leitura, mas atualmente e `end` que determina onde o bloco
 termina. Funcoes aceitam parametros de texto; chamadas podem aparecer antes ou
@@ -107,7 +105,8 @@ end
 
 ### F-strings
 
-Coloque `f` antes das aspas e o nome de um parametro entre chaves:
+Coloque `f` antes das aspas e o nome de um parametro ou variavel local entre
+chaves:
 
 ```sun
 func mostrar(nome)
@@ -117,8 +116,7 @@ end
 ```
 
 As chaves duplas `{{` e `}}` representam chaves literais. A interpolacao aceita
-nomes de parametros e variaveis locais, mas nao expressoes arbitrarias dentro
-das chaves.
+nomes de valores, mas nao expressoes arbitrarias dentro das chaves.
 
 ### Marcador `%v`
 
@@ -176,7 +174,38 @@ funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
 recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
 implementada usando `<cmath>` do C++.
 
-## 7. Comentarios e regras atuais
+## 7. C++ inline
+
+Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
+que ainda nao existem na linguagem. O terminador e `endcpp`:
+
+```sun
+inline cpp:
+#include <iostream>
+int helper_cpp() { return 42; }
+endcpp
+
+func mostrar(valor: number)
+    let resposta: number = valor + 2
+    inline cpp:
+        std::cout << valor << " + 2 = " << resposta << '\n';
+    endcpp
+end
+
+mostrar(40)
+```
+
+Um bloco no nivel superior e copiado para o escopo global do C++ gerado; use
+esse local para `#include`, declaracoes e funcoes C++. Um bloco dentro de uma
+funcao ou condicional e copiado para aquele ponto do corpo e pode ler ou alterar
+os parametros e variaveis Sun visiveis ali, usando seus nomes originais.
+Identificadores C++ reservados nao podem ser expostos como aliases.
+
+O trecho inline precisa ser C++ valido e compativel com o compilador escolhido.
+Ele e codigo nativo sem isolamento: pode afetar qualquer estado acessivel ao
+programa. Sun nao valida nem torna seguro esse C++.
+
+## 8. Comentarios e regras atuais
 
 Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
 
@@ -188,12 +217,12 @@ print("Ola!")
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas, chamadas, `print`, strings, numeros,
 booleanos, operadores aritmeticos e de comparacao, f-strings, `%v`, `if`,
-`elif`, `else` e a biblioteca `math`. Funcoes nao retornam valores. Ainda nao
-ha entrada interativa, loops, funcoes aninhadas, atribuicao apos declaracao ou
-comentarios no fim de uma linha. Operadores logicos `and`/`or`/`not` tambem nao
-sao suportados nesta etapa.
+`elif`, `else`, a biblioteca `math` e C++ inline. Funcoes nao retornam valores.
+Ainda nao ha entrada interativa, loops, funcoes aninhadas, atribuicao apos
+declaracao ou comentarios no fim de uma linha. Operadores logicos
+`and`/`or`/`not` tambem nao sao suportados nesta etapa.
 
-## 8. Erros e acessibilidade
+## 9. Erros e acessibilidade
 
 Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
 Por exemplo:
@@ -212,13 +241,13 @@ Problemas comuns:
 
 - **`source file must have the .su extension`**: confirme a extensao do arquivo.
 - **`missing 'end'`**: adicione `end` para fechar cada funcao ou bloco `if`.
-- **`unknown value`**: dentro da funcao, interpolacoes devem usar um
-  parametro declarado no cabecalho ou uma variavel local ja declarada.
+- **`missing 'endcpp'`**: feche cada bloco C++ com `endcpp`.
+- **`unknown value`**: use um parametro declarado ou variavel local ja declarada.
 - **`not enough %v values`**: adicione um argumento `%v=...` para cada marcador.
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe
   o compilador com `--compiler`.
 
-## 9. Executar os testes
+## 10. Executar os testes
 
 Com Python 3 instalado:
 

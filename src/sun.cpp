@@ -116,10 +116,19 @@ Expression parse_expression(const std::string& text, std::size_t line,
             continue;
         }
 
-        if (text[i] == '"') {
+        const bool interpolated = text[i] == 'f' && i + 1 < text.size() &&
+                                  text[i + 1] == '"';
+        if (text[i] == '"' || interpolated) {
+            if (interpolated) ++i;
             ++i;
             std::string value;
             bool closed = false;
+            auto flush_value = [&]() {
+                if (!value.empty()) {
+                    expression.parts.push_back({true, value});
+                    value.clear();
+                }
+            };
             while (i < text.size()) {
                 char c = text[i++];
                 if (c == '"') {
@@ -138,12 +147,45 @@ Expression parse_expression(const std::string& text, std::size_t line,
                     default: throw ParseError(line, "unsupported escape sequence");
                     }
                 } else {
+                    if (interpolated && c == '{') {
+                        if (i < text.size() && text[i] == '{') {
+                            ++i;
+                            value.push_back('{');
+                            continue;
+                        }
+                        flush_value();
+                        const auto close = text.find('}', i);
+                        if (close == std::string::npos) {
+                            throw ParseError(line, "missing '}' in f-string interpolation");
+                        }
+                        const auto name = text.substr(i, close - i);
+                        if (!is_identifier(name)) {
+                            throw ParseError(line, "f-string interpolation must be a parameter name");
+                        }
+                        if (parameters.find(name) == parameters.end()) {
+                            throw ParseError(line, "unknown string value '" + name + "'");
+                        }
+                        expression.parts.push_back({false, name});
+                        i = close + 1;
+                        continue;
+                    }
+                    if (interpolated && c == '}') {
+                        if (i < text.size() && text[i] == '}') {
+                            ++i;
+                            value.push_back('}');
+                            continue;
+                        }
+                        throw ParseError(line, "unmatched '}' in f-string");
+                    }
                     if (c == '\0') throw ParseError(line, "NUL byte is not allowed in string literal");
                     value.push_back(c);
                 }
             }
             if (!closed) throw ParseError(line, "unterminated string literal");
-            expression.parts.push_back({true, value});
+            flush_value();
+            if (expression.parts.empty() || (interpolated && value.empty())) {
+                expression.parts.push_back({true, ""});
+            }
         } else if (is_identifier_start(text[i])) {
             const std::size_t start = i++;
             while (i < text.size() && is_identifier_char(text[i])) ++i;
@@ -160,6 +202,68 @@ Expression parse_expression(const std::string& text, std::size_t line,
     if (expression.parts.empty()) throw ParseError(line, "expected a string expression");
     if (expect_part) throw ParseError(line, "expected a string value after '+'");
     return expression;
+}
+
+Expression parse_formatted_print(const std::vector<std::string>& arguments, std::size_t line,
+                                const std::unordered_set<std::string>& parameters) {
+    if (arguments.empty()) throw ParseError(line, "expected print(string_expression)");
+    const auto format = parse_expression(arguments.front(), line, parameters);
+    if (arguments.size() == 1 &&
+        (format.parts.size() != 1 || !format.parts.front().is_string ||
+         format.parts.front().value.find("%v") == std::string::npos)) {
+        return format;
+    }
+    if (format.parts.size() != 1 || !format.parts.front().is_string) {
+        throw ParseError(line, "formatted print requires a plain string literal as its first argument");
+    }
+
+    std::vector<Expression> values;
+    for (std::size_t i = 1; i < arguments.size(); ++i) {
+        const auto equals = arguments[i].find('=');
+        if (equals == std::string::npos || trim(arguments[i].substr(0, equals)) != "%v") {
+            throw ParseError(line, "formatted print arguments must use the form %v=value");
+        }
+        const auto value = trim(arguments[i].substr(equals + 1));
+        if (value.empty()) throw ParseError(line, "missing value after '%v='");
+        values.push_back(parse_expression(value, line, parameters));
+    }
+
+    Expression result;
+    std::string literal;
+    std::size_t value_index = 0;
+    const auto& text = format.parts.front().value;
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] != '%') {
+            literal.push_back(text[i++]);
+            continue;
+        }
+        if (i + 1 == text.size()) {
+            throw ParseError(line, "trailing '%' in formatted print; use '%%' for a literal percent");
+        }
+        if (text[i + 1] == '%') {
+            literal.push_back('%');
+            i += 2;
+        } else if (text[i + 1] == 'v') {
+            if (value_index >= values.size()) {
+                throw ParseError(line, "not enough %v values for formatted print");
+            }
+            if (!literal.empty()) {
+                result.parts.push_back({true, literal});
+                literal.clear();
+            }
+            result.parts.insert(result.parts.end(), values[value_index].parts.begin(),
+                                values[value_index].parts.end());
+            ++value_index;
+            i += 2;
+        } else {
+            throw ParseError(line, "unsupported formatted print placeholder; use %v or %%");
+        }
+    }
+    if (!literal.empty() || result.parts.empty()) result.parts.push_back({true, literal});
+    if (value_index != values.size()) {
+        throw ParseError(line, "too many %v values for formatted print");
+    }
+    return result;
 }
 
 std::pair<std::string, std::string> parse_call(const std::string& text, std::size_t line) {
@@ -197,10 +301,11 @@ Statement parse_statement(const std::string& text, std::size_t line,
         (text.size() == 5 || text[5] == ' ' || text[5] == '\t' || text[5] == '(')) {
         const auto rest = trim(text.substr(5));
         if (rest.size() < 2 || rest.front() != '(' || rest.back() != ')') {
-            throw ParseError(line, "expected print(string_expression)");
+            throw ParseError(line, "expected print(string_expression[, %v=value, ...])");
         }
+        const auto arguments = split_arguments(rest.substr(1, rest.size() - 2), line);
         return {Statement::Kind::print, "",
-                {parse_expression(rest.substr(1, rest.size() - 2), line, parameters)}, line};
+                {parse_formatted_print(arguments, line, parameters)}, line};
     }
 
     const auto call = parse_call(text, line);

@@ -1,5 +1,6 @@
-greet("Sun")
-
 func greet(name)
-    print("Hello, " + name + "!")
+    print(f"Hello, {name}!")
+    print("Seu nome e %v.", %v=name)
 end
+
+greet("Sun")

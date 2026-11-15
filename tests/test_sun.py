@@ -65,6 +65,60 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "Hello, Sun!\n\n")
 
+    def test_f_strings_interpolate_parameters_and_escape_braces(self):
+        result = self.invoke(
+            "f-string.su",
+            'func greet(name)\n'
+            '    print(f"Hello, {name}! {{welcome}}" + " again")\n'
+            'end\n'
+            'greet("Sun")\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "f-string")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Hello, Sun! {welcome} again\n")
+
+    def test_formatted_print_substitutes_values_and_escaped_percent(self):
+        result = self.invoke(
+            "formatted-print.su",
+            'func greet(name)\n'
+            '    print("Seu nome é %v (100%% Sun).", %v=name)\n'
+            '    print("%v and %v.", %v=name, %v="Sun")\n'
+            'end\n'
+            'greet("Sol")\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "formatted-print")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "Seu nome é Sol (100% Sun).\nSol and Sun.\n",
+        )
+
+    def test_formatted_print_reports_missing_values(self):
+        result = self.invoke("missing-format-value.su", 'print("Hello, %v")\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not enough %v values", result.stderr)
+
+    def test_empty_print_has_a_source_error(self):
+        result = self.invoke("empty-print.su", "print()\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("line 1: error: expected print(string_expression)", result.stderr)
+
     def test_reports_unknown_function_with_source_line(self):
         result = self.invoke("bad-call.su", 'print("start")\nmissing()\n')
         self.assertNotEqual(result.returncode, 0)

@@ -116,9 +116,9 @@ func mostrar(nome)
 end
 ```
 
-As chaves duplas `{{` e `}}` representam chaves literais. No prototipo atual,
-uma interpolacao aceita somente o nome de um parametro da funcao; expressoes
-arbitrarias e variaveis locais ainda nao existem.
+As chaves duplas `{{` e `}}` representam chaves literais. A interpolacao aceita
+nomes de parametros e variaveis locais, mas nao expressoes arbitrarias dentro
+das chaves.
 
 ### Marcador `%v`
 
@@ -134,11 +134,49 @@ end
 ```
 
 Os marcadores sao substituidos da esquerda para a direita. Cada `%v` exige
-exatamente um argumento `%v=...`; todos os valores devem ser expressoes de
-texto. Use `%%` para escrever um sinal de porcentagem literal quando estiver
-usando argumentos formatados.
+exatamente um argumento `%v=...`. Os valores podem ser dos tipos suportados e
+sao convertidos para texto. Use `%%` para escrever um sinal de porcentagem
+literal quando estiver usando argumentos formatados.
 
-## 6. Comentarios e regras atuais
+## 6. Numeros, operadores, condicoes e matematica
+
+Parametros podem declarar o tipo `string`, `number` ou `bool`. Parametros sem
+tipo continuam sendo `string` para manter compatibilidade com programas
+anteriores. Variaveis locais usam `let` e exigem tipo explicito:
+
+```sun
+import math
+
+func classificar(x: number)
+    let magnitude: number = math.sqrt(x * x)
+    let pontuacao: number = magnitude + 2 * 3
+
+    if pontuacao < 7:
+        print("pequeno")
+    elif pontuacao == 7:
+        print("sete")
+    else:
+        print(f"grande: {pontuacao}")
+    end
+end
+
+classificar(2)
+```
+
+Operadores aritmeticos: `+`, `-`, `*`, `/` e `%` (resto). `+` tambem concatena
+duas strings. Comparacoes disponiveis: `==`, `!=`, `<`, `<=`, `>` e `>=`.
+Comparacoes ordenadas aceitam numeros; igualdade aceita dois valores do mesmo
+tipo. Condicoes de `if`/`elif` precisam resultar em `bool`, por exemplo uma
+comparacao, `true`/`false` ou um parametro booleano. Blocos `if` podem ter
+varios `elif` e um `else`; todo o conjunto termina com `end`.
+
+`import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
+funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
+`math.log`, `math.pow`, `math.sin`, `math.sqrt` e `math.tan`. Essas funcoes
+recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
+implementada usando `<cmath>` do C++.
+
+## 7. Comentarios e regras atuais
 
 Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
 
@@ -147,12 +185,15 @@ Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
 print("Ola!")
 ```
 
-Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros de
-texto, chamadas, `print`, strings, concatenacao, f-strings e `%v`. Funcoes nao
-retornam valores. Ainda nao ha variaveis locais, numeros, entrada interativa,
-condicoes, loops, funcoes aninhadas ou comentarios no fim de uma linha.
+Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
+tipados, variaveis locais tipadas, chamadas, `print`, strings, numeros,
+booleanos, operadores aritmeticos e de comparacao, f-strings, `%v`, `if`,
+`elif`, `else` e a biblioteca `math`. Funcoes nao retornam valores. Ainda nao
+ha entrada interativa, loops, funcoes aninhadas, atribuicao apos declaracao ou
+comentarios no fim de uma linha. Operadores logicos `and`/`or`/`not` tambem nao
+sao suportados nesta etapa.
 
-## 7. Erros e acessibilidade
+## 8. Erros e acessibilidade
 
 Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
 Por exemplo:
@@ -170,14 +211,14 @@ manter os exemplos faceis de navegar.
 Problemas comuns:
 
 - **`source file must have the .su extension`**: confirme a extensao do arquivo.
-- **`missing 'end'`**: adicione `end` para fechar cada funcao.
-- **`unknown string value`**: dentro da funcao, interpolacoes devem usar um
-  parametro declarado no cabecalho.
+- **`missing 'end'`**: adicione `end` para fechar cada funcao ou bloco `if`.
+- **`unknown value`**: dentro da funcao, interpolacoes devem usar um
+  parametro declarado no cabecalho ou uma variavel local ja declarada.
 - **`not enough %v values`**: adicione um argumento `%v=...` para cada marcador.
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe
   o compilador com `--compiler`.
 
-## 8. Executar os testes
+## 9. Executar os testes
 
 Com Python 3 instalado:
 

@@ -16,12 +16,14 @@ em [HOWUSE.md](HOWUSE.md).
 
 ## Recursos atuais
 
-- Funcoes com parametros de texto e blocos terminados por `end`.
+- Funcoes com parametros tipados (`string`, `number`, `bool`) e blocos `end`.
 - Chamadas de funcao e `print(...)`.
+- Variaveis locais tipadas com `let`, operadores aritmeticos e comparacoes.
+- Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
 - Erros de compilacao com numero da linha, sem saida colorida obrigatoria.
 
-Sun ainda esta em prototipo: nao oferece variaveis locais, numeros, condicoes,
-loops ou valores de retorno.
+Sun ainda esta em prototipo: nao oferece loops, entrada interativa, atribuicao
+apos declaracao ou valores de retorno.

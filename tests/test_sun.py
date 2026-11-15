@@ -359,6 +359,125 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 1)
         self.assertIn("Sun runtime error: range step cannot be zero", executable.stderr)
 
+    def test_break_continue_and_istype(self):
+        result = self.invoke(
+            "break-continue-istype.su",
+            "func total(limit: number): number\n"
+            "    let result: number = 0\n"
+            "    for i in range(0, limit):\n"
+            "        if i == 1:\n"
+            "            continue\n"
+            "        end\n"
+            "        if i == 4:\n"
+            "            break\n"
+            "        end\n"
+            "        result = result + i\n"
+            "    end\n"
+            "    while true:\n"
+            "        result = result + 10\n"
+            "        break\n"
+            "    end\n"
+            "    if istype(result, number) and istype(limit, number) and not istype(result, string):\n"
+            "        return result\n"
+            "    else:\n"
+            "        return 0\n"
+            "    end\n"
+            "end\n"
+            'print("total=%v", %v=total(10))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "break-continue-istype")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "total=15\n")
+
+    def test_function_parameters_accept_trailing_default_values(self):
+        result = self.invoke(
+            "default-parameters.su",
+            "func describe(name: string = \"world\", times: number = 2): string\n"
+            '    return f"Hello {name} {times}"\n'
+            "end\n"
+            'print(describe())\n'
+            'print(describe("Sun"))\n'
+            'print(describe("Earth", 3))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "default-parameters")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "Hello world 2\nHello Sun 2\nHello Earth 3\n",
+        )
+
+    def test_default_parameters_work_in_statement_calls(self):
+        result = self.invoke(
+            "default-call.su",
+            'func greet(name: string = "world")\n'
+            '    print(f"Hello {name}")\n'
+            "end\n"
+            "greet()\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "default-call")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Hello world\n")
+
+    def test_default_values_must_be_typed_constant_expressions(self):
+        wrong_type = self.invoke(
+            "default-wrong-type.su",
+            'func invalid(value: number = "text")\n'
+            "end\n",
+        )
+        self.assertNotEqual(wrong_type.returncode, 0)
+        self.assertIn("default for parameter 'value' must have type double",
+                      wrong_type.stderr)
+
+        non_constant = self.invoke(
+            "default-variable.su",
+            "func invalid(value: number = other)\n"
+            "end\n",
+        )
+        self.assertNotEqual(non_constant.returncode, 0)
+        self.assertIn("unknown value 'other'", non_constant.stderr)
+
+    def test_default_parameters_must_be_trailing_and_break_must_be_in_loop(self):
+        invalid_defaults = self.invoke(
+            "default-order.su",
+            "func invalid(first: number = 1, second: number)\n"
+            "end\n",
+        )
+        self.assertNotEqual(invalid_defaults.returncode, 0)
+        self.assertIn("parameters without defaults cannot follow", invalid_defaults.stderr)
+
+        invalid_break = self.invoke(
+            "break-outside-loop.su",
+            "func invalid()\n"
+            "    break\n"
+            "end\n",
+        )
+        self.assertNotEqual(invalid_break.returncode, 0)
+        self.assertIn("'break' is only valid inside a loop", invalid_break.stderr)
+
     def test_rejects_math_calls_without_import(self):
         result = self.invoke(
             "missing-math-import.su",

@@ -22,6 +22,7 @@ struct SourceLine {
 
 struct Signature {
     std::vector<Type> parameters;
+    std::vector<std::optional<std::string>> default_values;
     std::optional<Type> return_type;
 };
 
@@ -38,6 +39,28 @@ struct ExprValue {
 
 using Symbols = std::unordered_map<std::string, Symbol>;
 using Signatures = std::unordered_map<std::string, Signature>;
+
+void validate_call_arity(const std::string& name, const Signature& signature,
+                         std::size_t supplied, std::size_t line) {
+    std::size_t required = signature.parameters.size();
+    for (std::size_t i = 0; i < signature.default_values.size(); ++i) {
+        if (signature.default_values[i]) {
+            required = i;
+            break;
+        }
+    }
+    if (supplied < required || supplied > signature.parameters.size()) {
+        if (required == signature.parameters.size()) {
+            throw ParseError(line, "function '" + name + "' expects " +
+                                     std::to_string(signature.parameters.size()) +
+                                     " argument(s), got " + std::to_string(supplied));
+        }
+        throw ParseError(line, "function '" + name + "' expects between " +
+                                 std::to_string(required) + " and " +
+                                 std::to_string(signature.parameters.size()) +
+                                 " argument(s), got " + std::to_string(supplied));
+    }
+}
 
 std::string trim(const std::string& text) {
     const auto first = text.find_first_not_of(" \t\r");
@@ -94,6 +117,32 @@ Type parse_type(const std::string& name, std::size_t line) {
     if (name == "number") return Type::number;
     if (name == "bool") return Type::boolean;
     throw ParseError(line, "unknown type '" + name + "' (use string, number, or bool)");
+}
+
+std::size_t find_assignment_operator(const std::string& text) {
+    bool in_string = false;
+    bool escaped = false;
+    int depth = 0;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (in_string) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') in_string = false;
+        } else if (c == '"') {
+            in_string = true;
+        } else if (c == '(') {
+            ++depth;
+        } else if (c == ')') {
+            --depth;
+        } else if (c == '=' && depth == 0 &&
+                   (i + 1 == text.size() || text[i + 1] != '=') &&
+                   (i == 0 || (text[i - 1] != '=' && text[i - 1] != '!' &&
+                               text[i - 1] != '<' && text[i - 1] != '>'))) {
+            return i;
+        }
+    }
+    return std::string::npos;
 }
 
 std::vector<std::string> split_arguments(const std::string& text, std::size_t line) {
@@ -167,6 +216,29 @@ std::pair<std::string, std::string> parse_call(const std::string& text, std::siz
     return {name, text.substr(open + 1, close - open - 1)};
 }
 
+std::size_t find_call_close(const std::string& text, std::size_t line) {
+    const auto open = text.find('(');
+    if (open == std::string::npos) throw ParseError(line, "expected '(' in function declaration");
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (std::size_t i = open; i < text.size(); ++i) {
+        const char c = text[i];
+        if (in_string) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') in_string = false;
+        } else if (c == '"') {
+            in_string = true;
+        } else if (c == '(') {
+            ++depth;
+        } else if (c == ')' && --depth == 0) {
+            return i;
+        }
+    }
+    throw ParseError(line, "malformed function declaration");
+}
+
 std::string cpp_string(const std::string& value) {
     std::ostringstream result;
     result << '"';
@@ -193,9 +265,11 @@ std::string cpp_string(const std::string& value) {
 class ExpressionParser {
 public:
     ExpressionParser(const std::string& source, std::size_t line, const Symbols& symbols,
-                     bool math_imported, const Signatures& signatures)
+                     bool math_imported, const Signatures& signatures,
+                     bool allow_function_calls = true)
         : tokens_(tokenize(source, line)), line_(line), symbols_(symbols),
-          math_imported_(math_imported), signatures_(signatures) {}
+          math_imported_(math_imported), signatures_(signatures),
+          allow_function_calls_(allow_function_calls) {}
 
     ExprValue parse() {
         auto value = parse_binary(1);
@@ -297,9 +371,13 @@ private:
                 }
                 return parse_math_call(name);
             }
+            if (name == "istype" && accept("(")) return parse_istype_call();
             if (accept("(")) {
                 const auto signature = signatures_.find(name);
                 if (signature == signatures_.end()) return parse_math_call(name);
+                if (!allow_function_calls_) {
+                    throw ParseError(line_, "default values cannot call functions");
+                }
                 if (!signature->second.return_type) {
                     throw ParseError(line_, "function '" + name + "' does not return a value");
                 }
@@ -312,12 +390,7 @@ private:
                         throw ParseError(line_, "expected ')' after function arguments");
                     }
                 }
-                if (arguments.size() != signature->second.parameters.size()) {
-                    throw ParseError(line_, "function '" + name + "' expects " +
-                                             std::to_string(signature->second.parameters.size()) +
-                                             " argument(s), got " +
-                                             std::to_string(arguments.size()));
-                }
+                validate_call_arity(name, signature->second, arguments.size(), line_);
                 std::ostringstream call;
                 call << "sun_fn_" << name << '(';
                 for (std::size_t i = 0; i < arguments.size(); ++i) {
@@ -329,6 +402,15 @@ private:
                     if (i) call << ", ";
                     call << arguments[i].cpp;
                 }
+                for (std::size_t i = arguments.size();
+                     i < signature->second.parameters.size(); ++i) {
+                    if (!signature->second.default_values[i]) {
+                        throw ParseError(line_, "missing default value for parameter " +
+                                                 std::to_string(i + 1) + " of '" + name + "'");
+                    }
+                    if (i) call << ", ";
+                    call << *signature->second.default_values[i];
+                }
                 call << ')';
                 return {*signature->second.return_type, call.str(), std::nullopt};
             }
@@ -339,6 +421,20 @@ private:
             return {found->second.type, found->second.cpp_name, std::nullopt};
         }
         throw ParseError(line_, "expected a number, string, bool, or variable");
+    }
+
+    ExprValue parse_istype_call() {
+        const auto value = parse_binary(1);
+        if (!accept(",")) {
+            throw ParseError(line_, "istype expects a value and a type, e.g. istype(x, number)");
+        }
+        if (peek().kind != Token::Kind::identifier) {
+            throw ParseError(line_, "istype type must be string, number, or bool");
+        }
+        const auto target_type = parse_type(take().text, line_);
+        if (!accept(")")) throw ParseError(line_, "expected ')' after istype arguments");
+        const bool matches = value.type == target_type;
+        return {Type::boolean, matches ? "true" : "false", std::nullopt};
     }
 
     ExprValue parse_fstring(const std::string& text) {
@@ -394,6 +490,9 @@ private:
     }
 
     ExprValue parse_math_call(const std::string& name) {
+        if (!allow_function_calls_) {
+            throw ParseError(line_, "default values cannot call functions");
+        }
         static const std::unordered_map<std::string, std::pair<std::string, std::size_t>> functions = {
             {"abs", {"std::abs", 1}}, {"ceil", {"std::ceil", 1}},
             {"cos", {"std::cos", 1}}, {"exp", {"std::exp", 1}},
@@ -484,6 +583,7 @@ private:
     const Symbols& symbols_;
     bool math_imported_;
     const Signatures& signatures_;
+    bool allow_function_calls_;
 };
 
 std::string indent_statements(const std::vector<std::string>& statements, std::size_t spaces) {
@@ -548,14 +648,42 @@ public:
                 if (function.name == "print") {
                     throw ParseError(function.line, "function name 'print' is reserved");
                 }
+                if (function.name == "istype") {
+                    throw ParseError(function.line, "function name 'istype' is reserved");
+                }
                 Signature signature;
                 for (const auto& parameter : function.parameters) {
                     signature.parameters.push_back(parameter.type);
+                    signature.default_values.push_back(std::nullopt);
                 }
                 signature.return_type = function.return_type;
                 if (!signatures_.emplace(function.name, signature).second) {
                     throw ParseError(function.line, "function '" + function.name + "' is already defined");
                 }
+            }
+        }
+        for (std::size_t i = 0; i < lines_.size(); ++i) {
+            const auto& line = lines_[i];
+            if (line.text == "inline cpp:") {
+                while (++i < lines_.size() && lines_[i].text != "endcpp") {}
+                continue;
+            }
+            if (!starts_word(line.text, "func")) continue;
+            const auto function = parse_function_header(line);
+            auto& signature = signatures_.at(function.name);
+            Symbols no_symbols;
+            for (std::size_t i = 0; i < function.parameters.size(); ++i) {
+                const auto& parameter = function.parameters[i];
+                if (!parameter.default_value) continue;
+                const auto value = ExpressionParser(*parameter.default_value, line.number,
+                                                    no_symbols, result.math_imported,
+                                                    signatures_, false).parse();
+                if (value.type != parameter.type) {
+                    throw ParseError(line.number, "default for parameter '" + parameter.name +
+                                                   "' must have type " +
+                                                   cpp_type(parameter.type));
+                }
+                signature.default_values[i] = value.cpp;
             }
         }
         result.main_body = parse_main(index, result.math_imported, result.global_cpp);
@@ -611,10 +739,7 @@ private:
     Function parse_function_header(const SourceLine& line) {
         const auto header = trim(line.text.substr(4));
         if (header.empty()) throw ParseError(line.number, "expected 'func name(parameters)'");
-        const auto close = header.find(')');
-        if (close == std::string::npos) {
-            throw ParseError(line.number, "malformed function declaration");
-        }
+        const auto close = find_call_close(header, line.number);
         const auto call = parse_call(header.substr(0, close + 1), line.number);
         const auto return_annotation = trim(header.substr(close + 1));
         std::optional<Type> return_type;
@@ -629,9 +754,12 @@ private:
         function.return_type = return_type;
         function.line = line.number;
         std::unordered_map<std::string, bool> seen;
+        bool saw_default = false;
         for (const auto& parameter_text : split_arguments(call.second, line.number)) {
-            const auto colon = parameter_text.find(':');
-            const auto name = trim(parameter_text.substr(0, colon));
+            const auto equals = find_assignment_operator(parameter_text);
+            const auto declaration = trim(parameter_text.substr(0, equals));
+            const auto colon = declaration.find(':');
+            const auto name = trim(declaration.substr(0, colon));
             if (!is_identifier(name)) {
                 throw ParseError(line.number, "invalid parameter name '" + name + "'");
             }
@@ -640,8 +768,21 @@ private:
             }
             const auto type = colon == std::string::npos
                                   ? Type::string
-                                  : parse_type(trim(parameter_text.substr(colon + 1)), line.number);
-            function.parameters.push_back({name, type});
+                                  : parse_type(trim(declaration.substr(colon + 1)), line.number);
+            std::optional<std::string> default_value;
+            if (equals != std::string::npos) {
+                const auto source = trim(parameter_text.substr(equals + 1));
+                if (source.empty()) {
+                    throw ParseError(line.number, "default value for parameter '" + name +
+                                                   "' cannot be empty");
+                }
+                default_value = source;
+                saw_default = true;
+            } else if (saw_default) {
+                throw ParseError(line.number,
+                                 "parameters without defaults cannot follow parameters with defaults");
+            }
+            function.parameters.push_back({name, type, default_value});
         }
         return function;
     }
@@ -809,7 +950,9 @@ private:
         auto condition = parse_condition(line, "while", symbols, math_imported);
         ++index;
         Symbols loop_symbols = symbols;
+        ++loop_depth_;
         auto body = parse_block(index, loop_symbols, math_imported);
+        --loop_depth_;
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "while block is missing 'end'");
@@ -862,7 +1005,9 @@ private:
         ++index;
         Symbols loop_symbols = symbols;
         loop_symbols[name] = {Type::number, variable_name};
+        ++loop_depth_;
         auto body = parse_block(index, loop_symbols, math_imported);
+        --loop_depth_;
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "for block is missing 'end'");
@@ -1033,11 +1178,7 @@ private:
         for (const auto& argument : split_arguments(call.second, line.number)) {
             values.push_back(expression(argument, line.number, symbols, math_imported));
         }
-        if (values.size() != signature->second.parameters.size()) {
-            throw ParseError(line.number, "function '" + call.first + "' expects " +
-                                           std::to_string(signature->second.parameters.size()) +
-                                           " argument(s), got " + std::to_string(values.size()));
-        }
+        validate_call_arity(call.first, signature->second, values.size(), line.number);
         std::ostringstream code;
         code << "sun_fn_" << call.first << '(';
         for (std::size_t i = 0; i < values.size(); ++i) {
@@ -1048,6 +1189,14 @@ private:
             }
             if (i) code << ", ";
             code << values[i].cpp;
+        }
+        for (std::size_t i = values.size(); i < signature->second.parameters.size(); ++i) {
+            if (!signature->second.default_values[i]) {
+                throw ParseError(line.number, "missing default value for parameter " +
+                                               std::to_string(i + 1) + " of '" + call.first + "'");
+            }
+            if (i) code << ", ";
+            code << *signature->second.default_values[i];
         }
         code << ");";
         return code.str();
@@ -1096,6 +1245,14 @@ private:
             ++index;
             return result;
         }
+        if (text == "break" || text == "continue") {
+            if (loop_depth_ == 0) {
+                throw ParseError(line.number, "'" + text +
+                                               "' is only valid inside a loop");
+            }
+            ++index;
+            return text + ";";
+        }
         if (is_assignment(text)) {
             auto result = parse_assignment(line, symbols, math_imported);
             ++index;
@@ -1121,6 +1278,7 @@ private:
     std::optional<Type> active_return_type_;
     bool inside_function_ = false;
     std::size_t next_loop_id_ = 0;
+    std::size_t loop_depth_ = 0;
 };
 
 } // namespace

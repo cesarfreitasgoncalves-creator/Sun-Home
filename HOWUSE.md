@@ -220,6 +220,53 @@ let resultado: number = dobro(21)
 Funcoes com retorno podem ser chamadas em expressoes. `return` sem valor so e
 valido em funcoes sem tipo de retorno.
 
+Parametros podem ter valores padrao no final da lista:
+
+```sun
+func cumprimentar(nome: string = "mundo", vezes: number = 1)
+    for i in range(0, vezes):
+        print(f"Ola, {nome}!")
+    end
+end
+
+cumprimentar()
+cumprimentar("Sun", 2)
+```
+
+Parametros com default precisam ser os ultimos. Os defaults aceitam expressoes
+constantes do tipo declarado, mas nao podem depender de variaveis nem chamar
+funcoes. Ao chamar a funcao, pode-se omitir qualquer sufixo de parametros que
+tenha default.
+
+`istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
+`number` ou `bool` e devolve `bool`:
+
+```sun
+let idade: number = 20
+print(istype(idade, number))
+print(istype(idade, string))
+```
+
+Como Sun e estaticamente tipada, `istype` e decidido durante a compilacao e
+gera `true` ou `false`; nao e uma verificacao dinamica de valores.
+
+Dentro de `while` e `for`, `break` encerra o loop atual e `continue` avanca para
+a proxima iteracao:
+
+```sun
+for n in range(0, 10):
+    if n == 2:
+        continue
+    end
+    if n == 5:
+        break
+    end
+    print(n)
+end
+```
+
+Essas instrucoes geram erro se forem usadas fora de um loop.
+
 `import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
 funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
 `math.log`, `math.pow`, `math.sin`, `math.sqrt` e `math.tan`. Essas funcoes
@@ -270,8 +317,9 @@ Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
 numeros, booleanos, operadores aritmeticos, de comparacao e logicos, f-strings,
 `%v`, `if`/`elif`/`else`, loops `while` e `for` por `range`, retornos tipados,
-a biblioteca `math` e C++ inline. Ainda nao ha listas, entrada interativa,
-funcoes aninhadas, `break`/`continue` ou comentarios no fim de uma linha.
+a biblioteca `math`, `istype`, parametros com valores padrao e C++ inline.
+Ainda nao ha listas, entrada interativa, funcoes aninhadas ou comentarios no
+fim de uma linha.
 
 ## 9. Erros e acessibilidade
 

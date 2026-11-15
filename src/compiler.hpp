@@ -20,6 +20,7 @@ struct ParseError : std::runtime_error {
 struct Parameter {
     std::string name;
     Type type;
+    std::optional<std::string> default_value = std::nullopt;
 };
 
 struct Function {

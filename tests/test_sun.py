@@ -684,6 +684,85 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "Name: Sun\n")
 
+    def test_local_module_alias_and_standard_library_precedence(self):
+        (WORK / "math.su").write_text(
+            "func sqrt(value: number): number\n"
+            "    return value + 1\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "module-import.su",
+            "import math\n"
+            "import local/math as (local_math)\n"
+            "let standard: number = math.sqrt(81)\n"
+            "let local: number = local_math.sqrt(4)\n"
+            "print(f\"{standard} {local}\")\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "module-import")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "9 5\n")
+
+    def test_structs_enums_and_simple_classes(self):
+        result = self.invoke(
+            "custom-types.su",
+            "enum Color\n"
+            "    Red\n"
+            "    Blue\n"
+            "end\n"
+            "struct Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "end\n"
+            "class Counter\n"
+            "    value: int\n"
+            "    func init(start: int)\n"
+            "        self.value = start\n"
+            "    end\n"
+            "    func increment()\n"
+            "        self.value = self.value + int(1)\n"
+            "    end\n"
+            "    func get(): int\n"
+            "        return self.value\n"
+            "    end\n"
+            "end\n"
+            "let point: Point = Point(int(2), int(3))\n"
+            "let color: Color = Color.Blue\n"
+            "let counter: Counter = Counter(int(4))\n"
+            "counter.increment()\n"
+            "print(point.x)\n"
+            "print(color)\n"
+            "print(counter.get())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "custom-types")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "2\nBlue\n5\n")
+
+    def test_enum_rejects_unknown_variant(self):
+        result = self.invoke(
+            "invalid-enum.su",
+            "enum Color\n    Red\nend\n"
+            "let color: Color = Color.Green\n",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown value 'Green' in enum 'Color'", result.stderr)
+
     def test_try_catches_input_errors_but_not_compile_errors(self):
         result = self.invoke(
             "input-error.su",
@@ -748,6 +827,25 @@ class SunCompilerTests(unittest.TestCase):
             executable.stdout,
             "3 7.5 A\ntrue\ntrue\nint arithmetic overflow\n",
         )
+
+    def test_char_supports_unicode_codepoints(self):
+        result = self.invoke(
+            "unicode-char.su",
+            'let accented: char = char("é")\n'
+            'let emoji: char = char("🌞")\n'
+            'print(f"{accented}{emoji}")\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "unicode-char")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "é🌞\n")
 
     def test_rejects_incompatible_static_types(self):
         result = self.invoke(

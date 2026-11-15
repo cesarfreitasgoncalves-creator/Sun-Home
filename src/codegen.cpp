@@ -1,5 +1,6 @@
 #include "compiler.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace sun {
@@ -66,15 +67,41 @@ bool sun_input_bool(const std::string& prompt) {
     throw SunRuntimeError("input expected 'true' or 'false'");
 }
 
-char sun_input_char(const std::string& prompt) {
-    const auto value = sun_input_string(prompt);
-    if (value.size() != 1) throw SunRuntimeError("input expected one single-byte character");
-    return value[0];
+bool sun_is_one_utf8_character(const std::string& value) {
+    if (value.empty()) return false;
+    const auto first = static_cast<unsigned char>(value[0]);
+    std::size_t length = 0;
+    if (first <= 0x7f) length = 1;
+    else if (first >= 0xc2 && first <= 0xdf) length = 2;
+    else if (first >= 0xe0 && first <= 0xef) length = 3;
+    else if (first >= 0xf0 && first <= 0xf4) length = 4;
+    else return false;
+    if (value.size() != length) return false;
+    for (std::size_t i = 1; i < length; ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte < 0x80 || byte > 0xbf) return false;
+    }
+    if (length >= 3) {
+        const auto second = static_cast<unsigned char>(value[1]);
+        if ((first == 0xe0 && second < 0xa0) ||
+            (first == 0xed && second > 0x9f) ||
+            (first == 0xf0 && second < 0x90) ||
+            (first == 0xf4 && second > 0x8f)) return false;
+    }
+    return true;
 }
 
-char sun_to_char(const std::string& value) {
-    if (value.size() != 1) throw SunRuntimeError("char() requires a one-byte string");
-    return value[0];
+std::string sun_input_char(const std::string& prompt) {
+    const auto value = sun_input_string(prompt);
+    if (!sun_is_one_utf8_character(value))
+        throw SunRuntimeError("input expected one UTF-8 character");
+    return value;
+}
+
+std::string sun_to_char(const std::string& value) {
+    if (!sun_is_one_utf8_character(value))
+        throw SunRuntimeError("char() requires one UTF-8 character");
+    return value;
 }
 
 std::int64_t sun_to_int(double value) {
@@ -197,6 +224,45 @@ private:
 };
 )cpp";
     }
+    for (const auto& type : program.custom_types) {
+        if (type.is_enum) {
+            out << "\nenum class SunType_" << type.name << " { ";
+            for (std::size_t i = 0; i < type.enum_values.size(); ++i) {
+                if (i) out << ", ";
+                out << type.enum_values[i];
+            }
+            out << " };\n";
+            continue;
+        }
+        out << "\nstruct SunType_" << type.name << " {\n";
+        for (const auto& field : type.fields) {
+            out << "    " << cpp_type(field.type) << ' ' << field.name << "{};\n";
+        }
+        for (const auto& method : type.methods) {
+            out << "    " << (method.return_type ? cpp_type(*method.return_type) : "void")
+                << ' ' << method.name << '(';
+            for (std::size_t i = 0; i < method.parameters.size(); ++i) {
+                if (i) out << ", ";
+                out << cpp_type(method.parameters[i].type);
+            }
+            out << ");\n";
+        }
+        out << "};\n";
+    }
+    for (const auto& type : program.custom_types) {
+        if (!type.is_class) continue;
+        const auto init = std::find_if(type.methods.begin(), type.methods.end(),
+                                       [](const Function& method) {
+                                           return method.name == "init";
+                                       });
+        if (init == type.methods.end()) continue;
+        out << "\nSunType_" << type.name << " sun_make_" << type.name << '(';
+        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << cpp_type(init->parameters[i].type);
+        }
+        out << ");\n";
+    }
     for (const auto& code : program.global_cpp) {
         out << '\n' << code << '\n';
     }
@@ -227,7 +293,18 @@ private:
            "    }\n"
            "    return next;\n"
            "}\n\n";
+    for (const auto& type : program.custom_types) {
+        if (!type.is_enum) continue;
+        out << "std::string sun_to_string(SunType_" << type.name << " value) {\n"
+            << "    switch (value) {\n";
+        for (const auto& value : type.enum_values) {
+            out << "    case SunType_" << type.name << "::" << value << ": return "
+                << '"' << value << '"' << ";\n";
+        }
+        out << "    }\n    return \"<invalid " << type.name << ">\";\n}\n\n";
+    }
     for (const auto& function : program.functions) {
+        if (!function.owner_type.empty()) continue;
         out << (function.return_type ? cpp_type(*function.return_type) : "void")
             << " sun_fn_" << function.name << '(';
         for (std::size_t i = 0; i < function.parameters.size(); ++i) {
@@ -238,6 +315,39 @@ private:
     }
     if (!program.functions.empty()) out << '\n';
     for (const auto& function : program.functions) {
+        if (function.owner_type.empty()) continue;
+        out << (function.return_type ? cpp_type(*function.return_type) : "void")
+            << " SunType_" << function.owner_type << "::" << function.name << '(';
+        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << cpp_type(function.parameters[i].type) << " sun_arg_"
+                << function.parameters[i].name;
+        }
+        out << ") {\n" << indent_statements(function.body, 4) << "}\n\n";
+    }
+    for (const auto& type : program.custom_types) {
+        if (!type.is_class) continue;
+        const auto init = std::find_if(type.methods.begin(), type.methods.end(),
+                                       [](const Function& method) {
+                                           return method.name == "init";
+                                       });
+        if (init == type.methods.end()) continue;
+        out << "SunType_" << type.name << " sun_make_" << type.name << '(';
+        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << cpp_type(init->parameters[i].type) << " sun_arg_"
+                << init->parameters[i].name;
+        }
+        out << ") {\n    SunType_" << type.name << " sun_instance{};\n"
+            << "    sun_instance.init(";
+        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
+            if (i) out << ", ";
+            out << "sun_arg_" << init->parameters[i].name;
+        }
+        out << ");\n    return sun_instance;\n}\n\n";
+    }
+    for (const auto& function : program.functions) {
+        if (!function.owner_type.empty()) continue;
         out << (function.return_type ? cpp_type(*function.return_type) : "void")
             << " sun_fn_" << function.name << '(';
         for (std::size_t i = 0; i < function.parameters.size(); ++i) {

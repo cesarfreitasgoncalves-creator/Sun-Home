@@ -179,8 +179,9 @@ duas strings. `int` e um inteiro assinado de 64 bits: sua divisao trunca em
 direcao a zero e overflow ou divisao por zero geram erro em runtime.
 `int(numero)` converte apenas valores inteiros dentro do intervalo de `int`;
 `number(inteiro)` converte explicitamente para `number`, e `int` pode ser
-promovido a `number` em expressoes. `char` representa um byte; `char("A")`
-converte uma string de exatamente um byte.
+promovido a `number` em expressoes. `char` representa um unico code point
+Unicode; `char("A")` e `char("é")` sao conversoes validas, enquanto strings
+vazias ou com mais de um caractere sao rejeitadas.
 
 Comparacoes disponiveis: `==`, `!=`, `<`, `<=`, `>` e `>=`. Comparacoes
 ordenadas aceitam numeros; igualdade aceita valores do mesmo tipo e pares
@@ -208,7 +209,8 @@ let inicial: char = input("Inicial: ", char)
 print(f"{nome}: {idade}, ativo={ativo}, inicial={inicial}")
 ```
 
-`bool` aceita exatamente `true` ou `false`; `char` aceita exatamente um byte.
+`bool` aceita exatamente `true` ou `false`; `char` aceita exatamente um
+code point UTF-8 valido.
 O prompt precisa ser uma expressao `string`.
 
 ### Listas
@@ -328,6 +330,75 @@ funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
 recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
 implementada usando `<cmath>` do C++.
 
+### Modulos locais
+
+Um arquivo `.su` pode importar outro arquivo do projeto usando um caminho
+relativo sem extensao e um alias. O modulo local e separado da biblioteca
+padrao: `import math` continua escolhendo a stdlib, enquanto `import local/math`
+carrega `local/math.su`.
+
+```sun
+import local/math as (math_local)
+
+let result: number = math_local.sqrt(4)
+print(result)
+```
+
+O alias entre parenteses e opcional. Modulos locais podem importar outros
+modulos locais; ciclos sao reportados como erro. Por enquanto, eles exportam
+funcoes e blocos `inline cpp` globais. Instrucoes executaveis no nivel superior
+de um modulo nao sao aceitas.
+
+### Structs, enums e classes simples
+
+`struct` declara campos e pode ser inicializada passando os valores na ordem
+declarada. `enum` declara variantes nomeadas. `class` aceita campos, metodos e
+um metodo opcional `init`; `self` refere-se ao objeto atual:
+
+```sun
+enum Color
+    Red
+    Blue
+end
+
+struct Point
+    x: number
+    y: number
+end
+
+class Counter
+    value: int
+
+    func init(start: int)
+        self.value = start
+    end
+
+    func increment()
+        self.value = self.value + int(1)
+    end
+end
+
+let point: Point = Point(2, 3)
+let color: Color = Color.Blue
+let counter: Counter = Counter(int(4))
+counter.increment()
+print(point.x)
+print(color)
+print(counter.value)
+```
+
+Tipos customizados podem ser usados em parametros, retornos e variaveis.
+Campos podem usar os tipos escalares ja suportados, mas nao outros tipos
+customizados ou listas. Heranca, classes genericas e listas de objetos ainda nao
+sao suportadas.
+
+O exemplo executavel completo esta em `examples/classes.su`:
+
+```sh
+build/sun examples/classes.su --compile
+./examples/classes
+```
+
 ## 7. Biblioteca `memory`
 
 `import memory` habilita regioes de bytes gerenciadas, sem expor enderecos
@@ -403,8 +474,9 @@ numeros, `int`, `char`, listas homogeneas, entrada tipada com `input`, operadore
 aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
 loops `while`, `for` por `range` e `for` por lista, retornos tipados,
 `try`/`catch` para erros de runtime Sun, as bibliotecas `math` e `memory`,
-`istype`, parametros com valores padrao e C++ inline. Ainda nao ha structs,
-enums, funcoes aninhadas ou comentarios no fim de uma linha.
+`istype`, parametros com valores padrao, imports de modulos locais, structs,
+enums, classes simples e C++ inline. Ainda nao ha funcoes aninhadas, heranca ou
+comentarios no fim de uma linha.
 
 ## 10. Erros e acessibilidade
 

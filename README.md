@@ -23,20 +23,22 @@ em [HOWUSE.md](HOWUSE.md).
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.
 - Listas homogeneas tipadas, indexacao, `append`, `len` e `for` sobre listas.
 - `input(prompt, tipo)` para leitura tipada e `try`/`catch` para erros de runtime Sun.
-- Inteiros assinados de 64 bits com conversoes verificadas e tipo `char` de um byte.
+- Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
   verificacao de bounds para leitura e escrita.
+- Imports de modulos locais com alias, structs, enums e classes simples com
+  campos, metodos e `init`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
 - Erros de compilacao com numero da linha, sem saida colorida obrigatoria.
 
-Sun ainda esta em prototipo: structs, enums, funcoes aninhadas e comentarios no
-fim de uma linha ainda nao sao suportados.
+Sun ainda esta em prototipo: heranca, funcoes aninhadas e comentarios no fim de
+uma linha ainda nao sao suportados.
 
 O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
 [HOWUSE.md](HOWUSE.md) para detalhes, exemplos e regras do C++ inline.

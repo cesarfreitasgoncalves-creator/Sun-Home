@@ -1,9 +1,11 @@
 #include "compiler.hpp"
+#include "modules.hpp"
 
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -80,10 +82,7 @@ Options parse_options(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         const auto options = parse_options(argc, argv);
-        std::ifstream input(options.source);
-        if (!input) {
-            throw std::runtime_error("cannot open source file '" + options.source.string() + "'");
-        }
+        std::istringstream input(sun::load_project_source(options.source));
         const auto generated = sun::transpile(sun::parse(input));
         if (options.output == "-") {
             std::cout << generated;

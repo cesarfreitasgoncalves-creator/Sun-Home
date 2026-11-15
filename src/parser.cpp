@@ -1,6 +1,7 @@
 #include "compiler.hpp"
 #include "lexer.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -39,8 +40,11 @@ struct ExprValue {
 
 using Symbols = std::unordered_map<std::string, Symbol>;
 using Signatures = std::unordered_map<std::string, Signature>;
+using Types = std::unordered_map<std::string, Type>;
+using CustomTypes = std::unordered_map<std::string, CustomTypeDefinition>;
 
 bool is_list_type(Type type);
+Type list_type_for(Type item_type);
 
 bool can_assign(Type expected, Type actual) {
     return expected == actual ||
@@ -127,18 +131,24 @@ bool starts_word(const std::string& text, const std::string& word) {
              text[word.size()] == '(' || text[word.size()] == ':'));
 }
 
-Type parse_type(const std::string& name, std::size_t line) {
+Type parse_type(const std::string& name, std::size_t line, const Types& types) {
+    if (const auto custom = types.find(name); custom != types.end()) return custom->second;
+    if (name.rfind("list[", 0) == 0 && name.back() == ']') {
+        const auto item = parse_type(name.substr(5, name.size() - 6), line, types);
+        if (item.kind == Type::Kind::custom || item == Type::region ||
+            item.kind == Type::Kind::list_number || item.kind == Type::Kind::list_integer ||
+            item.kind == Type::Kind::list_string || item.kind == Type::Kind::list_boolean ||
+            item.kind == Type::Kind::list_character) {
+            throw ParseError(line, "lists of custom types or nested lists are not supported");
+        }
+        return list_type_for(item);
+    }
     if (name == "string" || name == "str") return Type::string;
     if (name == "number") return Type::number;
     if (name == "bool") return Type::boolean;
     if (name == "region") return Type::region;
     if (name == "int") return Type::integer;
     if (name == "char") return Type::character;
-    if (name == "list[number]") return Type::list_number;
-    if (name == "list[int]") return Type::list_integer;
-    if (name == "list[string]") return Type::list_string;
-    if (name == "list[bool]") return Type::list_boolean;
-    if (name == "list[char]") return Type::list_character;
     throw ParseError(line, "unknown type '" + name +
                                "' (use string, number, bool, int, char, region, or list[type])");
 }
@@ -150,23 +160,23 @@ bool is_list_type(Type type) {
 }
 
 Type list_type_for(Type item_type) {
-    switch (item_type) {
-    case Type::number: return Type::list_number;
-    case Type::integer: return Type::list_integer;
-    case Type::string: return Type::list_string;
-    case Type::boolean: return Type::list_boolean;
-    case Type::character: return Type::list_character;
+    switch (item_type.kind) {
+    case Type::Kind::number: return Type::list_number;
+    case Type::Kind::integer: return Type::list_integer;
+    case Type::Kind::string: return Type::list_string;
+    case Type::Kind::boolean: return Type::list_boolean;
+    case Type::Kind::character: return Type::list_character;
     default: throw std::logic_error("unsupported list item type");
     }
 }
 
 Type list_item_type(Type list_type) {
-    switch (list_type) {
-    case Type::list_number: return Type::number;
-    case Type::list_integer: return Type::integer;
-    case Type::list_string: return Type::string;
-    case Type::list_boolean: return Type::boolean;
-    case Type::list_character: return Type::character;
+    switch (list_type.kind) {
+    case Type::Kind::list_number: return Type::number;
+    case Type::Kind::list_integer: return Type::integer;
+    case Type::Kind::list_string: return Type::string;
+    case Type::Kind::list_boolean: return Type::boolean;
+    case Type::Kind::list_character: return Type::character;
     default: throw std::logic_error("type is not a list");
     }
 }
@@ -318,11 +328,12 @@ class ExpressionParser {
 public:
     ExpressionParser(const std::string& source, std::size_t line, const Symbols& symbols,
                      bool math_imported, bool memory_imported,
-                     const Signatures& signatures,
+                     const Signatures& signatures, const Types& types,
+                     const CustomTypes& custom_types,
                      bool allow_function_calls = true)
         : tokens_(tokenize(source, line)), line_(line), symbols_(symbols),
           math_imported_(math_imported), memory_imported_(memory_imported),
-          signatures_(signatures),
+          signatures_(signatures), types_(types), custom_types_(custom_types),
           allow_function_calls_(allow_function_calls) {}
 
     ExprValue parse() {
@@ -441,6 +452,27 @@ private:
         }
         if (peek().kind == Token::Kind::identifier) {
             auto name = take().text;
+            const auto custom_type = custom_types_.find(name);
+            if (custom_type != custom_types_.end()) {
+                if (!custom_type->second.is_enum && accept("(")) {
+                    return parse_custom_constructor(custom_type->second);
+                }
+                if (custom_type->second.is_enum && accept(".")) {
+                    if (peek().kind != Token::Kind::identifier) {
+                        throw ParseError(line_, "expected an enum value after '" + name + ".'");
+                    }
+                    const auto value = take().text;
+                    const auto found = std::find(custom_type->second.enum_values.begin(),
+                                                 custom_type->second.enum_values.end(), value);
+                    if (found == custom_type->second.enum_values.end()) {
+                        throw ParseError(line_, "unknown value '" + value +
+                                                 "' in enum '" + name + "'");
+                    }
+                    return {types_.at(name), "SunType_" + name + "::" + value,
+                            std::nullopt};
+                }
+                throw ParseError(line_, "type '" + name + "' must be constructed or qualified");
+            }
             if (name == "true" || name == "false") {
                 return parse_postfix({Type::boolean, name, std::nullopt});
             }
@@ -548,19 +580,128 @@ private:
     }
 
     ExprValue parse_postfix(ExprValue value) {
-        while (accept("[")) {
-            if (!is_list_type(value.type)) {
-                throw ParseError(line_, "only lists can be indexed");
+        while (true) {
+            if (accept("[")) {
+                if (!is_list_type(value.type)) {
+                    throw ParseError(line_, "only lists can be indexed");
+                }
+                const auto index = parse_binary(1);
+                if (!accept("]")) throw ParseError(line_, "expected ']' after list index");
+                if (index.type != Type::integer && index.type != Type::number) {
+                    throw ParseError(line_, "list index must have type int or number");
+                }
+                value = {list_item_type(value.type),
+                         "sun_list_at(" + value.cpp + ", " + index.cpp + ")", std::nullopt};
+                continue;
             }
-            const auto index = parse_binary(1);
-            if (!accept("]")) throw ParseError(line_, "expected ']' after list index");
-            if (index.type != Type::integer && index.type != Type::number) {
-                throw ParseError(line_, "list index must have type int or number");
+            if (!accept(".")) break;
+            if (value.type.kind != Type::Kind::custom) {
+                throw ParseError(line_, "member access requires a class or struct value");
             }
-            value = {list_item_type(value.type),
-                     "sun_list_at(" + value.cpp + ", " + index.cpp + ")", std::nullopt};
+            if (peek().kind != Token::Kind::identifier) {
+                throw ParseError(line_, "expected a field or method name after '.'");
+            }
+            const auto member = take().text;
+            const auto type = custom_types_.find(value.type.name);
+            if (type == custom_types_.end() || type->second.is_enum) {
+                throw ParseError(line_, "enum values do not have fields or methods");
+            }
+            if (accept("(")) {
+                const auto signature = signatures_.find(value.type.name + "." + member);
+                if (signature == signatures_.end()) {
+                    throw ParseError(line_, "unknown method '" + member +
+                                             "' on '" + value.type.name + "'");
+                }
+                if (!signature->second.return_type) {
+                    throw ParseError(line_, "void method '" + member +
+                                             "' cannot be used as a value");
+                }
+                const auto arguments = parse_expression_arguments();
+                validate_call_arity(member, signature->second, arguments.size(), line_);
+                std::ostringstream call;
+                call << "(" << value.cpp << ")." << member << '(';
+                append_call_arguments(call, member, signature->second, arguments);
+                call << ')';
+                value = {*signature->second.return_type, call.str(), std::nullopt};
+                continue;
+            }
+            const auto field = std::find_if(
+                type->second.fields.begin(), type->second.fields.end(),
+                [&](const Field& candidate) { return candidate.name == member; });
+            if (field == type->second.fields.end()) {
+                throw ParseError(line_, "unknown field '" + member +
+                                         "' on '" + value.type.name + "'");
+            }
+            value = {field->type, "(" + value.cpp + ")." + member, std::nullopt};
         }
         return value;
+    }
+
+    ExprValue parse_custom_constructor(const CustomTypeDefinition& definition) {
+        if (!allow_function_calls_) {
+            throw ParseError(line_, "default values cannot construct objects");
+        }
+        const auto arguments = parse_expression_arguments();
+        const auto init = std::find_if(definition.methods.begin(), definition.methods.end(),
+                                       [](const Function& method) {
+                                           return method.name == "init";
+                                       });
+        if (definition.is_class && init != definition.methods.end()) {
+            const auto signature = signatures_.find(definition.name + ".init");
+            validate_call_arity(definition.name, signature->second, arguments.size(), line_);
+            std::ostringstream call;
+            call << "sun_make_" << definition.name << '(';
+            append_call_arguments(call, definition.name, signature->second, arguments);
+            call << ')';
+            return {types_.at(definition.name), call.str(), std::nullopt};
+        }
+        if (arguments.size() != definition.fields.size()) {
+            throw ParseError(line_, "constructor '" + definition.name + "' expects " +
+                                     std::to_string(definition.fields.size()) +
+                                     " field value(s), got " +
+                                     std::to_string(arguments.size()));
+        }
+        std::ostringstream construction;
+        construction << "SunType_" << definition.name << '{';
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+            if (!can_assign(definition.fields[i].type, arguments[i].type)) {
+                throw ParseError(line_, "constructor field '" + definition.fields[i].name +
+                                         "' requires type " +
+                                         cpp_type(definition.fields[i].type));
+            }
+            if (i) construction << ", ";
+            construction << converted_value(definition.fields[i].type,
+                                            arguments[i].type, arguments[i].cpp);
+        }
+        construction << '}';
+        return {types_.at(definition.name), construction.str(), std::nullopt};
+    }
+
+    std::vector<ExprValue> parse_expression_arguments() {
+        std::vector<ExprValue> arguments;
+        if (!accept(")")) {
+            do {
+                arguments.push_back(parse_binary(1));
+            } while (accept(","));
+            if (!accept(")")) throw ParseError(line_, "expected ')' after arguments");
+        }
+        return arguments;
+    }
+
+    void append_call_arguments(std::ostringstream& call, const std::string& name,
+                               const Signature& signature,
+                               const std::vector<ExprValue>& arguments) const {
+        validate_call_arity(name, signature, arguments.size(), line_);
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+            if (!can_assign(signature.parameters[i], arguments[i].type)) {
+                throw ParseError(line_, "argument " + std::to_string(i + 1) +
+                                         " of '" + name + "' must have type " +
+                                         cpp_type(signature.parameters[i]));
+            }
+            if (i) call << ", ";
+            call << converted_value(signature.parameters[i], arguments[i].type,
+                                    arguments[i].cpp);
+        }
     }
 
     ExprValue parse_input_call() {
@@ -573,7 +714,7 @@ private:
             if (peek().kind != Token::Kind::identifier) {
                 throw ParseError(line_, "input type must be string/str, number, int, bool, or char");
             }
-            type = parse_type(take().text, line_);
+            type = parse_type(take().text, line_, types_);
         }
         if (type == Type::region || is_list_type(type)) {
             throw ParseError(line_, "input supports only string, number, int, bool, or char");
@@ -582,12 +723,16 @@ private:
         if (prompt.type != Type::string) {
             throw ParseError(line_, "input prompt must have type string");
         }
-        static const std::unordered_map<Type, std::string> input_helpers = {
-            {Type::string, "sun_input_string"}, {Type::number, "sun_input_number"},
-            {Type::integer, "sun_input_int"}, {Type::boolean, "sun_input_bool"},
-            {Type::character, "sun_input_char"},
-        };
-        return {type, input_helpers.at(type) + "(" + prompt.cpp + ")", std::nullopt};
+        std::string helper;
+        switch (type.kind) {
+        case Type::Kind::string: helper = "sun_input_string"; break;
+        case Type::Kind::number: helper = "sun_input_number"; break;
+        case Type::Kind::integer: helper = "sun_input_int"; break;
+        case Type::Kind::boolean: helper = "sun_input_bool"; break;
+        case Type::Kind::character: helper = "sun_input_char"; break;
+        default: throw ParseError(line_, "unsupported input type");
+        }
+        return {type, helper + "(" + prompt.cpp + ")", std::nullopt};
     }
 
     ExprValue parse_len_call() {
@@ -612,7 +757,7 @@ private:
         if (peek().kind != Token::Kind::identifier) {
             throw ParseError(line_, "istype type must be string, number, bool, int, char, or region");
         }
-        const auto target_type = parse_type(take().text, line_);
+        const auto target_type = parse_type(take().text, line_, types_);
         if (target_type == Type::region && !memory_imported_) {
             throw ParseError(line_, "the region type requires 'import memory'");
         }
@@ -694,6 +839,10 @@ private:
                 }
                 if (found->second.type == Type::region) {
                     throw ParseError(line_, "memory regions cannot be interpolated as text");
+                }
+                if (found->second.type.kind == Type::Kind::custom &&
+                    !custom_types_.at(found->second.type.name).is_enum) {
+                    throw ParseError(line_, "class and struct values cannot be interpolated directly");
                 }
                 parts.push_back("sun_to_string(" + found->second.cpp_name + ")");
                 i = close + 1;
@@ -804,6 +953,10 @@ private:
             if (left.type == Type::region) {
                 throw ParseError(line_, "memory regions cannot be compared directly");
             }
+            if (left.type.kind == Type::Kind::custom &&
+                !custom_types_.at(left.type.name).is_enum) {
+                throw ParseError(line_, "class and struct values cannot be compared directly");
+            }
             return {Type::boolean, "((" + left.cpp + ") " + op + " (" + right.cpp + "))",
                     std::nullopt};
         }
@@ -867,6 +1020,8 @@ private:
     bool math_imported_;
     bool memory_imported_;
     const Signatures& signatures_;
+    const Types& types_;
+    const CustomTypes& custom_types_;
     bool allow_function_calls_;
 };
 
@@ -920,6 +1075,7 @@ public:
             skip_ignored(index);
         }
         memory_imported_ = result.memory_imported;
+        prepare_custom_types(index, result);
         for (std::size_t i = index; i < lines_.size(); ++i) {
             if (is_ignored(lines_[i])) continue;
             if (lines_[i].text == "inline cpp:") {
@@ -971,7 +1127,8 @@ public:
                 const auto value = ExpressionParser(*parameter.default_value, line.number,
                                                     no_symbols, result.math_imported,
                                                     result.memory_imported,
-                                                    signatures_, false).parse();
+                                                    signatures_, types_, custom_types_,
+                                                    false).parse();
                 if (!can_assign(parameter.type, value.type)) {
                     throw ParseError(line.number, "default for parameter '" + parameter.name +
                                                    "' must have type " +
@@ -988,6 +1145,226 @@ public:
     }
 
 private:
+    struct TypeRange {
+        std::size_t start;
+        std::size_t end;
+        std::string kind;
+        std::string name;
+    };
+
+    void prepare_custom_types(std::size_t first, Program& program) {
+        std::vector<TypeRange> ranges;
+        for (std::size_t i = first; i < lines_.size(); ++i) {
+            const auto& text = lines_[i].text;
+            std::string kind;
+            if (starts_word(text, "class")) kind = "class";
+            else if (starts_word(text, "struct")) kind = "struct";
+            else if (starts_word(text, "enum")) kind = "enum";
+            else continue;
+            const auto name = trim(text.substr(kind.size()));
+            if (!is_identifier(name)) {
+                throw ParseError(lines_[i].number, "expected " + kind + " name");
+            }
+            if (types_.find(name) != types_.end()) {
+                throw ParseError(lines_[i].number, "type '" + name + "' is already defined");
+            }
+            std::size_t end = i + 1;
+            int depth = 1;
+            for (; end < lines_.size(); ++end) {
+                const auto& candidate = lines_[end].text;
+                if (candidate == "end") {
+                    if (--depth == 0) break;
+                    continue;
+                }
+                if (starts_word(candidate, "func") || starts_word(candidate, "if") ||
+                    starts_word(candidate, "while") || starts_word(candidate, "for") ||
+                    candidate == "try:") {
+                    ++depth;
+                }
+            }
+            if (end == lines_.size()) {
+                throw ParseError(lines_[i].number, kind + " '" + name + "' is missing 'end'");
+            }
+            const Type custom_type{Type::Kind::custom, name};
+            types_.emplace(name, custom_type);
+            ranges.push_back({i, end, kind, name});
+            i = end;
+        }
+
+        for (const auto& range : ranges) {
+            CustomTypeDefinition definition;
+            definition.name = range.name;
+            definition.is_class = range.kind == "class";
+            definition.is_enum = range.kind == "enum";
+            custom_types_.emplace(range.name, std::move(definition));
+        }
+
+        for (const auto& range : ranges) {
+            CustomTypeDefinition definition;
+            definition.name = range.name;
+            definition.is_class = range.kind == "class";
+            definition.is_enum = range.kind == "enum";
+            std::unordered_map<std::string, bool> seen_members;
+            for (std::size_t i = range.start + 1; i < range.end; ++i) {
+                const auto& line = lines_[i];
+                if (is_ignored(line)) continue;
+                if (starts_word(line.text, "func")) {
+                    if (!definition.is_class) {
+                        throw ParseError(line.number, "only classes can declare methods");
+                    }
+                    auto method = parse_function_header(line);
+                    method.owner_type = range.name;
+                    if (method.name == "init" && method.return_type) {
+                        throw ParseError(line.number, "class init methods cannot declare a return type");
+                    }
+                    if (method.name == "init" &&
+                        std::any_of(method.parameters.begin(), method.parameters.end(),
+                                    [](const Parameter& parameter) {
+                                        return parameter.default_value.has_value();
+                                    })) {
+                        throw ParseError(line.number, "class init parameters cannot have defaults");
+                    }
+                    if (method.name != "init" &&
+                        std::any_of(method.parameters.begin(), method.parameters.end(),
+                                    [](const Parameter& parameter) {
+                                        return parameter.default_value.has_value();
+                                    })) {
+                        throw ParseError(line.number,
+                                         "class method parameters cannot have defaults");
+                    }
+                    if (!seen_members.emplace(method.name, true).second) {
+                        throw ParseError(line.number, "duplicate class member '" + method.name + "'");
+                    }
+                    Signature signature;
+                    for (const auto& parameter : method.parameters) {
+                        signature.parameters.push_back(parameter.type);
+                        signature.default_values.push_back(std::nullopt);
+                    }
+                    signature.return_type = method.return_type;
+                    if (!signatures_.emplace(range.name + "." + method.name,
+                                             std::move(signature)).second) {
+                        throw ParseError(line.number, "duplicate class method '" + method.name + "'");
+                    }
+                    definition.methods.push_back(std::move(method));
+                    std::size_t method_end = i + 1;
+                    int method_depth = 1;
+                    for (; method_end <= range.end; ++method_end) {
+                        const auto& nested = lines_[method_end].text;
+                        if (nested == "end") {
+                            if (--method_depth == 0) break;
+                            continue;
+                        }
+                        if (starts_word(nested, "func") || starts_word(nested, "if") ||
+                            starts_word(nested, "while") || starts_word(nested, "for") ||
+                            nested == "try:") {
+                            ++method_depth;
+                        }
+                    }
+                    if (method_depth != 0) {
+                        throw ParseError(line.number,
+                                         "class method '" + definition.methods.back().name +
+                                             "' is missing 'end'");
+                    }
+                    i = method_end;
+                    continue;
+                }
+                if (definition.is_enum) {
+                    const auto value = trim(line.text);
+                    if (!is_identifier(value) || !seen_members.emplace(value, true).second) {
+                        throw ParseError(line.number, "expected a unique enum value name");
+                    }
+                    definition.enum_values.push_back(value);
+                    continue;
+                }
+                const auto colon = line.text.find(':');
+                if (colon == std::string::npos) {
+                    throw ParseError(line.number, "class and struct fields use 'name: type'");
+                }
+                const auto field_name = trim(line.text.substr(0, colon));
+                if (!is_identifier(field_name) ||
+                    !seen_members.emplace(field_name, true).second) {
+                    throw ParseError(line.number, "invalid or duplicate field '" + field_name + "'");
+                }
+                const auto field_type = parse_type(trim(line.text.substr(colon + 1)),
+                                                   line.number, types_);
+                if (field_type.kind == Type::Kind::custom ||
+                    field_type == Type::region || field_type == Type::empty_list) {
+                    throw ParseError(line.number, "unsupported field type");
+                }
+                definition.fields.push_back({field_name, field_type});
+            }
+            if (definition.is_enum && definition.enum_values.empty()) {
+                throw ParseError(lines_[range.start].number,
+                                 "enum '" + range.name + "' must declare at least one value");
+            }
+            custom_types_[range.name] = definition;
+            program.custom_types.push_back(std::move(definition));
+        }
+
+        for (const auto& range : ranges) {
+            const auto definition = custom_types_.at(range.name);
+            for (const auto& method : definition.methods) {
+                std::size_t method_line = range.start + 1;
+                while (method_line < range.end) {
+                    if (starts_word(lines_[method_line].text, "func")) {
+                        const auto header = trim(lines_[method_line].text.substr(4));
+                        const auto close = find_call_close(header, lines_[method_line].number);
+                        if (parse_call(header.substr(0, close + 1),
+                                       lines_[method_line].number).first == method.name) break;
+                    }
+                    ++method_line;
+                }
+                if (method_line == range.end) {
+                    throw ParseError(lines_[range.start].number,
+                                     "could not locate class method '" + method.name + "'");
+                }
+                Symbols symbols;
+                symbols.emplace("self", Symbol{types_.at(range.name), "(*this)"});
+                for (const auto& parameter : method.parameters) {
+                    symbols.emplace(parameter.name,
+                                    Symbol{parameter.type, "sun_arg_" + parameter.name});
+                }
+                auto function = method;
+                ++method_line;
+                const auto previous_return_type = active_return_type_;
+                const auto previous_function_state = inside_function_;
+                active_return_type_ = function.return_type;
+                inside_function_ = true;
+                bool definitely_returns = false;
+                function.body = parse_block(method_line, symbols, program.math_imported,
+                                            &definitely_returns);
+                active_return_type_ = previous_return_type;
+                inside_function_ = previous_function_state;
+                if (method_line == range.end) {
+                    throw ParseError(lines_[range.start].number,
+                                     "class method '" + function.name + "' is missing 'end'");
+                }
+                if (function.return_type && !definitely_returns) {
+                    throw ParseError(function.line,
+                                     "method '" + function.name +
+                                         "' must return a value on every path");
+                }
+                functions_.push_back(std::move(function));
+            }
+            for (std::size_t i = range.start; i <= range.end; ++i) {
+                lines_[i].text.clear();
+                lines_[i].raw_text.clear();
+            }
+        }
+        for (auto& definition : program.custom_types) {
+            for (auto& method : definition.methods) {
+                for (const auto& function : functions_) {
+                    if (function.owner_type == definition.name &&
+                        function.name == method.name) {
+                        method = function;
+                        break;
+                    }
+                }
+            }
+            custom_types_[definition.name] = definition;
+        }
+    }
+
     std::string parse_inline_cpp(std::size_t& index, const Symbols& symbols,
                                  bool global_scope = false) {
         const auto start = lines_[index];
@@ -1043,7 +1420,7 @@ private:
             if (return_annotation[0] != ':') {
                 throw ParseError(line.number, "return type must follow ':' (e.g. ': number')");
             }
-            return_type = parse_type(trim(return_annotation.substr(1)), line.number);
+            return_type = parse_type(trim(return_annotation.substr(1)), line.number, types_);
             if (*return_type == Type::region && !memory_imported_) {
                 throw ParseError(line.number, "the region type requires 'import memory'");
             }
@@ -1067,7 +1444,8 @@ private:
             }
             const auto type = colon == std::string::npos
                                   ? Type::string
-                                  : parse_type(trim(declaration.substr(colon + 1)), line.number);
+                                  : parse_type(trim(declaration.substr(colon + 1)), line.number,
+                                               types_);
             if (type == Type::region && !memory_imported_) {
                 throw ParseError(line.number, "the region type requires 'import memory'");
             }
@@ -1178,7 +1556,7 @@ private:
     ExprValue expression(const std::string& text, std::size_t line, const Symbols& symbols,
                          bool math_imported) const {
         return ExpressionParser(text, line, symbols, math_imported, memory_imported_,
-                                signatures_).parse();
+                                signatures_, types_, custom_types_).parse();
     }
 
     ExprValue parse_condition(const SourceLine& line, const std::string& keyword,
@@ -1432,7 +1810,8 @@ private:
         if (symbols.find(name) != symbols.end()) {
             throw ParseError(line.number, "value '" + name + "' is already declared in this scope");
         }
-        const auto type = parse_type(trim(typed_name.substr(colon + 1)), line.number);
+        const auto type = parse_type(trim(typed_name.substr(colon + 1)), line.number,
+                                     types_);
         if (type == Type::region && !memory_imported_) {
             throw ParseError(line.number, "the region type requires 'import memory'");
         }
@@ -1503,6 +1882,10 @@ private:
         if (first.type == Type::region) {
             throw ParseError(line.number, "memory regions cannot be printed directly");
         }
+        if (first.type.kind == Type::Kind::custom &&
+            !custom_types_.at(first.type.name).is_enum) {
+            throw ParseError(line.number, "class and struct values cannot be printed directly");
+        }
         if (first.type == Type::empty_list) {
             throw ParseError(line.number, "an empty list needs a declared list type before printing");
         }
@@ -1522,6 +1905,11 @@ private:
                                             line.number, symbols, math_imported));
                 if (values.back().type == Type::region) {
                     throw ParseError(line.number, "memory regions cannot be formatted as text");
+                }
+                if (values.back().type.kind == Type::Kind::custom &&
+                    !custom_types_.at(values.back().type.name).is_enum) {
+                    throw ParseError(line.number,
+                                     "class and struct values cannot be formatted directly");
                 }
             }
             std::vector<std::string> parts;
@@ -1649,6 +2037,75 @@ private:
                converted_value(left.type, value.type, value.cpp) + ";";
     }
 
+    std::string parse_member_assignment(const SourceLine& line, const std::string& text,
+                                        const Symbols& symbols, bool math_imported) const {
+        const auto equals = find_assignment_operator(text);
+        const auto left = expression(trim(text.substr(0, equals)), line.number,
+                                     symbols, math_imported);
+        if (left.cpp.find(").") == std::string::npos) {
+            throw ParseError(line.number, "member assignment requires object.field");
+        }
+        const auto value = expression(trim(text.substr(equals + 1)), line.number,
+                                      symbols, math_imported);
+        if (!can_assign(left.type, value.type)) {
+            throw ParseError(line.number, "cannot assign " + cpp_type(value.type) +
+                                           " to field of type " + cpp_type(left.type));
+        }
+        return left.cpp + " = " + converted_value(left.type, value.type, value.cpp) + ";";
+    }
+
+    std::string parse_method_statement(const SourceLine& line, const std::string& text,
+                                      const Symbols& symbols, bool math_imported) const {
+        const auto dot = text.find('.');
+        const auto open = text.find('(', dot == std::string::npos ? 0 : dot);
+        if (dot == std::string::npos || open == std::string::npos) {
+            throw ParseError(line.number, "expected object.method(...)");
+        }
+        const auto object = expression(trim(text.substr(0, dot)), line.number,
+                                       symbols, math_imported);
+        if (object.type.kind != Type::Kind::custom) {
+            throw ParseError(line.number, "method call requires a class or struct value");
+        }
+        const auto method = trim(text.substr(dot + 1, open - dot - 1));
+        if (!is_identifier(method)) {
+            throw ParseError(line.number, "invalid method name");
+        }
+        const auto call = parse_call(method + text.substr(open), line.number);
+        const auto signature = signatures_.find(object.type.name + "." + method);
+        if (signature == signatures_.end()) {
+            throw ParseError(line.number, "unknown method '" + method +
+                                           "' on '" + object.type.name + "'");
+        }
+        if (signature->second.return_type) {
+            throw ParseError(line.number, "method '" + method +
+                                           "' returns a value; use it in an expression");
+        }
+        std::vector<ExprValue> arguments;
+        for (const auto& argument : split_arguments(call.second, line.number)) {
+            arguments.push_back(expression(argument, line.number, symbols, math_imported));
+        }
+        validate_call_arity(method, signature->second, arguments.size(), line.number);
+        std::ostringstream code;
+        code << "(" << object.cpp << ")." << method << '(';
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+            if (!can_assign(signature->second.parameters[i], arguments[i].type)) {
+                throw ParseError(line.number, "argument " + std::to_string(i + 1) +
+                                               " to '" + method + "' must have type " +
+                                               cpp_type(signature->second.parameters[i]));
+            }
+            if (i) code << ", ";
+            code << converted_value(signature->second.parameters[i], arguments[i].type,
+                                    arguments[i].cpp);
+        }
+        for (std::size_t i = arguments.size();
+             i < signature->second.parameters.size(); ++i) {
+            if (i) code << ", ";
+            code << *signature->second.default_values[i];
+        }
+        code << ");";
+        return code.str();
+    }
+
     std::string parse_user_call(const SourceLine& line, const std::string& text,
                                 const Symbols& symbols, bool math_imported) const {
         const auto call = parse_call(text, line.number);
@@ -1759,6 +2216,12 @@ private:
             ++index;
             return result;
         }
+        if (assignment != std::string::npos &&
+            text.substr(0, assignment).find('.') != std::string::npos) {
+            auto result = parse_member_assignment(line, text, symbols, math_imported);
+            ++index;
+            return result;
+        }
         if (is_assignment(text)) {
             auto result = parse_assignment(line, symbols, math_imported);
             ++index;
@@ -1770,6 +2233,16 @@ private:
                 throw ParseError(line.number, "expected print(expression)");
             }
             auto result = parse_print(line, call.second, symbols, math_imported);
+            ++index;
+            return result;
+        }
+        const auto method_dot = text.find('.');
+        const auto method_object = method_dot == std::string::npos
+            ? symbols.end() : symbols.find(trim(text.substr(0, method_dot)));
+        if (method_object != symbols.end() &&
+            method_object->second.type.kind == Type::Kind::custom &&
+            text.find('(', method_dot) != std::string::npos) {
+            auto result = parse_method_statement(line, text, symbols, math_imported);
             ++index;
             return result;
         }
@@ -1787,24 +2260,28 @@ private:
     std::size_t next_catch_id_ = 0;
     std::size_t loop_depth_ = 0;
     bool memory_imported_ = false;
+    Types types_;
+    CustomTypes custom_types_;
 };
 
 } // namespace
 
 std::string cpp_type(Type type) {
-    switch (type) {
-    case Type::string: return "std::string";
-    case Type::number: return "double";
-    case Type::boolean: return "bool";
-    case Type::region: return "SunMemoryRegion";
-    case Type::integer: return "std::int64_t";
-    case Type::character: return "char";
-    case Type::list_number: return "std::vector<double>";
-    case Type::list_integer: return "std::vector<std::int64_t>";
-    case Type::list_string: return "std::vector<std::string>";
-    case Type::list_boolean: return "std::vector<bool>";
-    case Type::list_character: return "std::vector<char>";
-    case Type::empty_list: return "std::vector<int>";
+    if (type.kind == Type::Kind::custom) return "SunType_" + type.name;
+    switch (type.kind) {
+    case Type::Kind::string: return "std::string";
+    case Type::Kind::number: return "double";
+    case Type::Kind::boolean: return "bool";
+    case Type::Kind::region: return "SunMemoryRegion";
+    case Type::Kind::integer: return "std::int64_t";
+    case Type::Kind::character: return "std::string";
+    case Type::Kind::list_number: return "std::vector<double>";
+    case Type::Kind::list_integer: return "std::vector<std::int64_t>";
+    case Type::Kind::list_string: return "std::vector<std::string>";
+    case Type::Kind::list_boolean: return "std::vector<bool>";
+    case Type::Kind::list_character: return "std::vector<std::string>";
+    case Type::Kind::empty_list: return "std::vector<int>";
+    case Type::Kind::custom: break;
     }
     throw std::logic_error("invalid Sun type");
 }

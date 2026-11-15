@@ -1,0 +1,42 @@
+enum Direction
+    North
+    South
+    East
+    West
+end
+
+struct Point
+    x: number
+    y: number
+end
+
+class Counter
+    value: int
+
+    func init(start: int)
+        self.value = start
+    end
+
+    func increment()
+        self.value = self.value + int(1)
+    end
+
+    func current(): int
+        return self.value
+    end
+end
+
+let position: Point = Point(12, 8)
+let direction: Direction = Direction.North
+let counter: Counter = Counter(int(0))
+
+counter.increment()
+counter.increment()
+
+let x: number = position.x
+let y: number = position.y
+let count: int = counter.current()
+
+print(f"Point: ({x}, {y})")
+print(f"Direction: {direction}")
+print(f"Count: {count}")

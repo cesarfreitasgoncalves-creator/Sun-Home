@@ -5,7 +5,7 @@ CXXFLAGS ?= -std=c++17 -Wall -Wextra -pedantic
 
 all: build/sun
 
-SUN_SOURCES := src/main.cpp src/lexer.cpp src/parser.cpp src/codegen.cpp
+SUN_SOURCES := src/main.cpp src/lexer.cpp src/parser.cpp src/codegen.cpp src/modules.cpp
 
 build/sun: $(SUN_SOURCES) src/compiler.hpp src/lexer.hpp
 	mkdir -p build

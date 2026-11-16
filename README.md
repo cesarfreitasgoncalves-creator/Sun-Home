@@ -20,7 +20,7 @@ em [HOWUSE.md](HOWUSE.md).
 
 - Funcoes com parametros tipados (`string`, `number`, `bool`, `int`, `char`,
   listas e `region`) e blocos `end`.
-- Chamadas de funcao e `print(...)`.
+- Chamadas de funcao, `print(...)` e `printc(...)` para texto com cores ANSI/RGB.
 - Variaveis locais tipadas com `let`, constantes imutaveis com `const`,
   operadores aritmeticos e comparacoes.
 - Operadores logicos com curto-circuito; loops `while` e `for ... in range(...)`.

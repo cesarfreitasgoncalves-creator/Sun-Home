@@ -164,6 +164,26 @@ print(title.upper())
 print(title.split(" "))
 ```
 
+### Impressao colorida
+
+`printc(texto, cor[, formato])` imprime uma string ou f-string em cor e restaura
+a cor padrao do terminal ao final. Cores nomeadas aceitas: `red`, `blue`,
+`yellow`, `magenta` e `cyan`. Por padrao elas usam codigos ANSI; o terceiro
+argumento pode ser `"rgb"` para usar ANSI truecolor ou `"ansi"` para selecionar
+explicitamente a paleta ANSI:
+
+```sun
+let name: string = "Sun"
+printc("Aviso", "yellow")
+printc(f"Ola, {name}", "cyan", "rgb")
+```
+
+Tambem e possivel passar diretamente um codigo ANSI SGR entre aspas
+(`"1;35"` ou `"\\033[35m"`), um RGB decimal (`"255,80,10"`) ou hexadecimal
+(`"#FF500A"`). Esses codigos sao identificados automaticamente; o terceiro
+argumento so se aplica a cores nomeadas. Os componentes RGB e os valores SGR
+devem estar entre 0 e 255.
+
 ### F-strings
 
 Coloque `f` antes das aspas e escreva expressoes Sun entre chaves:
@@ -590,7 +610,7 @@ de saida que precisa caber no tipo `int` do sistema.
 retorna o valor de uma variavel de ambiente ou o texto alternativo informado;
 `sys.env_exists(name)` informa se ela esta definida.
 
-### Structs, enums e classes simples
+### Structs, enums e classes
 
 `struct` declara campos e pode ser inicializada passando os valores na ordem
 declarada. `enum` declara variantes nomeadas. `class` aceita campos, metodos e
@@ -630,9 +650,45 @@ print(counter.value)
 
 Tipos customizados podem ser usados em parametros, retornos e variaveis.
 Campos podem usar os tipos escalares ja suportados, mas nao outros tipos
-customizados ou listas. Heranca entre classes comuns, classes genericas e listas
-de objetos ainda nao sao suportadas. Uma classe de erro pode herdar diretamente
-de `AnError`, conforme descrito na secao de erros.
+customizados ou listas. Classes comuns aceitam heranca simples de uma classe
+declarada anteriormente. Campos e metodos sao herdados, e metodos podem ser
+sobrescritos com a mesma lista de tipos de parametros e o mesmo tipo de retorno.
+Nao ha conversao implicita de uma classe derivada para sua classe base.
+
+Se a classe base (ou algum ancestral) declarar `init`, a classe derivada herda
+esse inicializador quando nao declara o seu proprio. Se declarar um inicializador
+proprio, ele deve comecar com `super.init(...)` quando houver um inicializador
+herdado; essa chamada deve ser a primeira instrucao executavel. Se nao houver
+`init` na hierarquia, o construtor de uma classe derivada sem inicializador
+aceita os campos herdados e proprios e os atribui diretamente. Se houver um
+inicializador herdado, os campos proprios da derivada comecam com seus valores
+padrao. Heranca multipla, classes genericas e listas de objetos ainda nao sao
+suportadas. Classes de erro continuam herdando diretamente apenas de `AnError`.
+
+```sun
+class Animal
+    name: string
+    def init(name: string)
+        self.name = name
+    end
+    def sound(): string
+        return "?"
+    end
+end
+
+class Dog(Animal)
+    def init(name: string)
+        super.init(name)
+    end
+    def sound(): string
+        return "woof"
+    end
+end
+
+let dog: Dog = Dog("Rex")
+print(dog.name)
+print(dog.sound())
+```
 
 Enums podem declarar variantes com campos escalares, e `match` seleciona um
 bloco por valor ou variante. Os campos de uma variante podem ser ligados a nomes
@@ -796,9 +852,8 @@ aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
 loops `while`, `for` por `range` e `for` por lista, retornos tipados,
 `try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
 `memory`, `istype`, parametros com valores padrao, imports de modulos locais,
-structs, enums com payload, `match`, classes simples, funcoes aninhadas,
-dicionarios e C++ inline. Heranca entre classes comuns ainda nao e suportada;
-classes de erro podem herdar de `AnError`.
+structs, enums com payload, `match`, classes com heranca simples, funcoes
+aninhadas, dicionarios e C++ inline. Classes de erro podem herdar de `AnError`.
 
 ## 11. Erros e acessibilidade
 

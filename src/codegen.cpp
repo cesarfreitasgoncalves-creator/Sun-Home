@@ -124,6 +124,10 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* print = std::get_if<PrintStatement>(&statement.node)) {
         out << prefix << "std::cout << sun_to_string(" << emit_expression(print->value)
             << ") << '\\n';\n";
+    } else if (const auto* print = std::get_if<PrintColorStatement>(&statement.node)) {
+        out << prefix << "std::cout << " << cpp_string(print->color_prefix)
+            << " << " << emit_expression(print->value)
+            << " << \"\\x1b[0m\" << '\\n';\n";
     } else if (const auto* assertion = std::get_if<AssertStatement>(&statement.node)) {
         out << prefix << "if (!(" << emit_expression(assertion->condition)
             << ")) throw SunRuntimeError(\"assertion failed\");\n";
@@ -280,6 +284,63 @@ std::string render_block(const Block& statements, std::size_t spaces) {
     std::ostringstream result;
     emit_block(result, statements, spaces);
     return result.str();
+}
+
+bool inherits_method(const Program& program, const CustomTypeDefinition& type,
+                     const std::string& method_name) {
+    auto base_name = type.base_type;
+    while (!base_name.empty()) {
+        const auto base = std::find_if(
+            program.custom_types.begin(), program.custom_types.end(),
+            [&](const CustomTypeDefinition& candidate) {
+                return candidate.name == base_name;
+            });
+        if (base == program.custom_types.end()) break;
+        if (std::any_of(base->methods.begin(), base->methods.end(),
+                        [&](const Function& method) { return method.name == method_name; })) {
+            return true;
+        }
+        base_name = base->base_type;
+    }
+    return false;
+}
+
+std::vector<Field> all_class_fields(const Program& program,
+                                    const CustomTypeDefinition& type) {
+    std::vector<Field> fields;
+    if (!type.base_type.empty()) {
+        const auto base = std::find_if(
+            program.custom_types.begin(), program.custom_types.end(),
+            [&](const CustomTypeDefinition& candidate) {
+                return candidate.name == type.base_type;
+            });
+        if (base != program.custom_types.end()) fields = all_class_fields(program, *base);
+    }
+    fields.insert(fields.end(), type.fields.begin(), type.fields.end());
+    return fields;
+}
+
+std::pair<std::string, const Function*> class_initializer(
+    const Program& program, const CustomTypeDefinition& type) {
+    const auto own = std::find_if(
+        type.methods.begin(), type.methods.end(),
+        [](const Function& method) { return method.name == "init"; });
+    if (own != type.methods.end()) return {type.name, &*own};
+    auto base_name = type.base_type;
+    while (!base_name.empty()) {
+        const auto base = std::find_if(
+            program.custom_types.begin(), program.custom_types.end(),
+            [&](const CustomTypeDefinition& candidate) {
+                return candidate.name == base_name;
+            });
+        if (base == program.custom_types.end()) break;
+        const auto inherited = std::find_if(
+            base->methods.begin(), base->methods.end(),
+            [](const Function& method) { return method.name == "init"; });
+        if (inherited != base->methods.end()) return {base->name, &*inherited};
+        base_name = base->base_type;
+    }
+    return {{}, nullptr};
 }
 
 } // namespace
@@ -767,7 +828,11 @@ private:
             continue;
         }
         out << "\nstruct SunType_" << type.name;
-        if (type.is_error) out << " : public SunRuntimeError";
+        if (type.is_error) {
+            out << " : public SunRuntimeError";
+        } else if (!type.base_type.empty()) {
+            out << " : public SunType_" << type.base_type;
+        }
         out << " {\n";
         if (type.is_error) {
             const auto init = std::find_if(
@@ -789,27 +854,39 @@ private:
             out << "    " << cpp_type(field.type) << ' ' << field.name << "{};\n";
         }
         for (const auto& method : type.methods) {
-            out << "    " << (method.return_type ? cpp_type(*method.return_type) : "void")
+            const bool inherited = method.name != "init" &&
+                                   inherits_method(program, type, method.name);
+            out << "    ";
+            if (method.name != "init") out << "virtual ";
+            out << (method.return_type ? cpp_type(*method.return_type) : "void")
                 << ' ' << method.name << '(';
             for (std::size_t i = 0; i < method.parameters.size(); ++i) {
                 if (i) out << ", ";
                 out << cpp_type(method.parameters[i].type);
             }
-            out << ");\n";
+            out << ')';
+            if (inherited) out << " override";
+            out << ";\n";
         }
         out << "};\n";
     }
     for (const auto& type : program.custom_types) {
-        if (!type.is_class || type.is_error) continue;
-        const auto init = std::find_if(type.methods.begin(), type.methods.end(),
-                                       [](const Function& method) {
-                                           return method.name == "init";
-                                       });
-        if (init == type.methods.end()) continue;
+        const auto [initializer_owner, initializer] = class_initializer(program, type);
+        (void)initializer_owner;
+        if (!type.is_class || type.is_error ||
+            (!initializer && type.base_type.empty())) continue;
         out << "\nSunType_" << type.name << " sun_make_" << type.name << '(';
-        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << cpp_type(init->parameters[i].type);
+        if (initializer) {
+            for (std::size_t i = 0; i < initializer->parameters.size(); ++i) {
+                if (i) out << ", ";
+                out << cpp_type(initializer->parameters[i].type);
+            }
+        } else {
+            const auto fields = all_class_fields(program, type);
+            for (std::size_t i = 0; i < fields.size(); ++i) {
+                if (i) out << ", ";
+                out << cpp_type(fields[i].type);
+            }
         }
         out << ");\n";
     }
@@ -941,25 +1018,39 @@ private:
         out << ");\n}\n\n";
     }
     for (const auto& type : program.custom_types) {
-        if (!type.is_class || type.is_error) continue;
-        const auto init = std::find_if(type.methods.begin(), type.methods.end(),
-                                       [](const Function& method) {
-                                           return method.name == "init";
-                                       });
-        if (init == type.methods.end()) continue;
+        const auto [initializer_owner, initializer] = class_initializer(program, type);
+        (void)initializer_owner;
+        if (!type.is_class || type.is_error ||
+            (!initializer && type.base_type.empty())) continue;
         out << "SunType_" << type.name << " sun_make_" << type.name << '(';
-        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << cpp_type(init->parameters[i].type) << " sun_arg_"
-                << init->parameters[i].name;
+        if (initializer) {
+            for (std::size_t i = 0; i < initializer->parameters.size(); ++i) {
+                if (i) out << ", ";
+                out << cpp_type(initializer->parameters[i].type) << " sun_arg_"
+                    << initializer->parameters[i].name;
+            }
+        } else {
+            const auto fields = all_class_fields(program, type);
+            for (std::size_t i = 0; i < fields.size(); ++i) {
+                if (i) out << ", ";
+                out << cpp_type(fields[i].type) << " sun_arg_" << fields[i].name;
+            }
         }
-        out << ") {\n    SunType_" << type.name << " sun_instance{};\n"
-            << "    sun_instance.init(";
-        for (std::size_t i = 0; i < init->parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << "sun_arg_" << init->parameters[i].name;
+        out << ") {\n    SunType_" << type.name << " sun_instance{};\n";
+        if (initializer) {
+            out << "    sun_instance.init(";
+            for (std::size_t i = 0; i < initializer->parameters.size(); ++i) {
+                if (i) out << ", ";
+                out << "sun_arg_" << initializer->parameters[i].name;
+            }
+            out << ");\n";
+        } else {
+            for (const auto& field : all_class_fields(program, type)) {
+                out << "    sun_instance." << field.name << " = sun_arg_"
+                    << field.name << ";\n";
+            }
         }
-        out << ");\n    return sun_instance;\n}\n\n";
+        out << "    return sun_instance;\n}\n\n";
     }
     for (const auto& function : program.functions) {
         if (!function.owner_type.empty()) continue;

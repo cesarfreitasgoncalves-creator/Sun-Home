@@ -104,6 +104,37 @@ para facilitar a leitura, mas atualmente e `end` que determina onde o bloco
 termina. Funcoes aceitam parametros de texto; chamadas podem aparecer antes ou
 depois da declaracao da funcao.
 
+Chamadas aceitam argumentos nomeados usando `nome=valor`. Eles podem vir depois
+dos posicionais e podem ser escritos em qualquer ordem; parametros omitidos
+usam seus valores padrao:
+
+```sun
+def greet(name: string, punctuation: string = "!")
+    print("Hello, " + name + punctuation)
+end
+
+greet(punctuation="?", name="Ada")
+```
+
+O suporte se aplica a funcoes e metodos declarados em Sun e a construtores de
+tipos Sun. Funcoes integradas, bibliotecas e metodos de colecao continuam
+recebendo argumentos posicionais.
+
+Uma funcao tambem pode receber argumentos extras com parametros tipados:
+`*values: int` coleta os posicionais restantes em `list[int]`;
+`**options: string` coleta nomes extras em `dict[string, string]`. Os tipos
+dos valores extras sao escalares e explicitos. Desempacotamento na chamada
+(`func(*items, **options)`) ainda nao e suportado:
+
+```sun
+def report(*values: int, **options: string)
+    print(values)
+    print(options)
+end
+
+report(int(3), int(5), label="total", mode="brief")
+```
+
 ## 5. Strings e interpolacao
 
 Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t` e
@@ -113,6 +144,19 @@ Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t` e
 def mostrar(nome)
     print("Ola, " + nome + "!")
 end
+```
+
+Strings oferecem `upper()`, `lower()` e `trim()`; `split(separador)` retorna
+`list[string]`; `replace(busca, substituicao)` retorna uma nova string;
+`contains(texto)`, `starts_with(prefixo)` e `ends_with(sufixo)` retornam `bool`.
+`split` e `replace` rejeitam o texto de busca vazio com um erro de runtime.
+As transformacoes de maiusculas/minusculas e `trim()` operam por byte usando o
+locale C ativo; as demais operacoes preservam os bytes UTF-8 sem normalizacao.
+
+```sun
+let title: string = "  Sun language  ".trim().replace("Sun", "Moon")
+print(title.upper())
+print(title.split(" "))
 ```
 
 ### F-strings

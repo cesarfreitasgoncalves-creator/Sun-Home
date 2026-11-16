@@ -27,6 +27,10 @@ struct SourceLine {
 
 struct Signature {
     std::vector<Type> parameters;
+    std::vector<std::string> parameter_names;
+    std::vector<bool> variadic_positional;
+    std::vector<bool> variadic_keyword;
+    std::vector<Type> variadic_value_types;
     std::vector<std::optional<std::string>> default_values;
     std::vector<std::optional<Expression>> default_expressions;
     std::optional<Type> return_type;
@@ -50,6 +54,11 @@ struct ExprValue {
               Expression ast)
         : type(type), cpp(std::move(cpp)), plain_string(std::move(plain_string)),
           ast(std::move(ast)) {}
+};
+
+struct CallArgument {
+    std::optional<std::string> name;
+    ExprValue value;
 };
 
 Expression make_expression(Expression::Kind kind, Type type, std::string value,
@@ -112,30 +121,6 @@ Expression converted_expression(Type expected, Type actual, Expression value) {
         return make_expression(Expression::Kind::cast, expected, "double", {std::move(value)});
     }
     return value;
-}
-
-void validate_call_arity(const std::string& name, const Signature& signature,
-                         std::size_t supplied, std::size_t line) {
-    std::size_t required = signature.parameters.size();
-    for (std::size_t i = 0; i < signature.default_values.size(); ++i) {
-        if (signature.default_values[i]) {
-            required = i;
-            break;
-        }
-    }
-    if (supplied < required || supplied > signature.parameters.size()) {
-        if (required == signature.parameters.size()) {
-            throw ParseError(line, "function '" + name + "' expects " +
-                                     std::to_string(signature.parameters.size()) +
-                                     " argument(s), got " + std::to_string(supplied),
-                             "Check the function declaration and provide the required arguments.");
-        }
-        throw ParseError(line, "function '" + name + "' expects between " +
-                             std::to_string(required) + " and " +
-                             std::to_string(signature.parameters.size()) +
-                             " argument(s), got " + std::to_string(supplied),
-                         "Check the function declaration and provide the required arguments.");
-    }
 }
 
 std::string trim(const std::string& text) {
@@ -364,6 +349,189 @@ Type list_item_type(Type list_type) {
     }
 }
 
+void add_signature_parameter(Signature& signature, const Parameter& parameter) {
+    signature.parameters.push_back(parameter.type);
+    signature.parameter_names.push_back(parameter.name);
+    signature.variadic_positional.push_back(parameter.variadic_positional);
+    signature.variadic_keyword.push_back(parameter.variadic_keyword);
+    signature.variadic_value_types.push_back(parameter.variadic_value_type);
+    signature.default_values.push_back(parameter.default_value);
+    signature.default_expressions.push_back(std::nullopt);
+}
+
+std::vector<ExprValue> bind_call_arguments(const std::string& name,
+                                           const Signature& signature,
+                                           const std::vector<CallArgument>& supplied,
+                                           std::size_t line) {
+    const bool has_variadic = std::any_of(
+        signature.variadic_positional.begin(), signature.variadic_positional.end(),
+        [](bool value) { return value; }) ||
+        std::any_of(signature.variadic_keyword.begin(), signature.variadic_keyword.end(),
+                    [](bool value) { return value; });
+    const bool has_named = std::any_of(
+        supplied.begin(), supplied.end(),
+        [](const CallArgument& argument) { return argument.name.has_value(); });
+    if (!has_variadic && !has_named) {
+        const auto required = static_cast<std::size_t>(std::count_if(
+            signature.default_values.begin(), signature.default_values.end(),
+            [](const auto& value) { return !value.has_value(); }));
+        if (supplied.size() < required || supplied.size() > signature.parameters.size()) {
+            std::string message;
+            if (required == signature.parameters.size()) {
+                message = "function '" + name + "' expects " +
+                          std::to_string(signature.parameters.size()) +
+                          " argument(s), got " + std::to_string(supplied.size());
+            } else {
+                message = "function '" + name + "' expects between " +
+                          std::to_string(required) + " and " +
+                          std::to_string(signature.parameters.size()) +
+                          " argument(s), got " + std::to_string(supplied.size());
+            }
+            throw ParseError(line, message,
+                             "Check the function declaration and provide the required arguments.");
+        }
+    }
+
+    std::vector<std::optional<ExprValue>> bound(signature.parameters.size());
+    std::vector<ExprValue> extra_positional;
+    std::vector<std::pair<std::string, ExprValue>> extra_keyword;
+    std::size_t positional_index = 0;
+    bool saw_keyword = false;
+
+    const auto positional_parameter = [&](std::size_t from) {
+        while (from < signature.parameters.size() &&
+               (signature.variadic_positional[from] ||
+                signature.variadic_keyword[from])) {
+            ++from;
+        }
+        return from;
+    };
+
+    for (const auto& argument : supplied) {
+        if (!argument.name) {
+            if (saw_keyword) {
+                throw ParseError(line, "positional arguments cannot follow named arguments");
+            }
+            positional_index = positional_parameter(positional_index);
+            if (positional_index < signature.parameters.size()) {
+                bound[positional_index++] = argument.value;
+            } else if (std::find(signature.variadic_positional.begin(),
+                                 signature.variadic_positional.end(), true) !=
+                       signature.variadic_positional.end()) {
+                extra_positional.push_back(argument.value);
+            } else {
+                throw ParseError(line, "too many arguments for function '" + name + "'");
+            }
+            continue;
+        }
+
+        saw_keyword = true;
+        const auto parameter = std::find(signature.parameter_names.begin(),
+                                         signature.parameter_names.end(),
+                                         *argument.name);
+        const auto index = static_cast<std::size_t>(
+            std::distance(signature.parameter_names.begin(), parameter));
+        if (parameter != signature.parameter_names.end() &&
+            !signature.variadic_positional[index] &&
+            !signature.variadic_keyword[index]) {
+            if (bound[index]) {
+                throw ParseError(line, "multiple values for parameter '" +
+                                           *argument.name + "' of '" + name + "'");
+            }
+            bound[index] = argument.value;
+            continue;
+        }
+        const auto keyword_variadic = std::find(signature.variadic_keyword.begin(),
+                                                signature.variadic_keyword.end(), true);
+        if (keyword_variadic == signature.variadic_keyword.end()) {
+            throw ParseError(line, "unknown named argument '" + *argument.name +
+                                       "' for function '" + name + "'");
+        }
+        if (std::any_of(extra_keyword.begin(), extra_keyword.end(),
+                        [&](const auto& entry) { return entry.first == *argument.name; })) {
+            throw ParseError(line, "duplicate named argument '" + *argument.name + "'");
+        }
+        extra_keyword.emplace_back(*argument.name, argument.value);
+    }
+
+    std::vector<ExprValue> result;
+    result.reserve(signature.parameters.size());
+    for (std::size_t i = 0; i < signature.parameters.size(); ++i) {
+        const auto& expected = signature.parameters[i];
+        if (signature.variadic_positional[i]) {
+            const auto item_type = signature.variadic_value_types[i];
+            std::vector<Expression> items;
+            std::ostringstream values;
+            for (std::size_t item = 0; item < extra_positional.size(); ++item) {
+                const auto& actual = extra_positional[item];
+                if (!can_assign(item_type, actual.type)) {
+                    throw ParseError(line, "variadic argument '" +
+                                               signature.parameter_names[i] +
+                                               "' requires type " + cpp_type(item_type));
+                }
+                if (item) values << ", ";
+                values << converted_value(item_type, actual.type, actual.cpp);
+                items.push_back(converted_expression(item_type, actual.type, actual.ast));
+            }
+            const auto list_type = list_type_for(item_type);
+            result.push_back(make_expr_value(
+                list_type, "std::vector<" + cpp_type(item_type) + ">{" +
+                               values.str() + "}",
+                make_expression(Expression::Kind::list, list_type, cpp_type(item_type),
+                                std::move(items))));
+            continue;
+        }
+        if (signature.variadic_keyword[i]) {
+            const auto value_type = signature.variadic_value_types[i];
+            std::vector<Expression> entries;
+            std::ostringstream values;
+            for (std::size_t item = 0; item < extra_keyword.size(); ++item) {
+                const auto& [key, actual] = extra_keyword[item];
+                if (!can_assign(value_type, actual.type)) {
+                    throw ParseError(line, "named argument '" + key + "' for '" + name +
+                                               "' requires type " + cpp_type(value_type));
+                }
+                if (item) values << ", ";
+                values << '{' << cpp_string(key) << ", "
+                       << converted_value(value_type, actual.type, actual.cpp) << '}';
+                entries.push_back(make_expression(Expression::Kind::string_literal,
+                                                  Type::string, key));
+                entries.push_back(converted_expression(value_type, actual.type,
+                                                       actual.ast));
+            }
+            const Type map_type{Type::Kind::dictionary,
+                                "string," + scalar_type_name(value_type)};
+            result.push_back(make_expr_value(
+                map_type, "std::map<std::string, " + cpp_type(value_type) + ">{" +
+                              values.str() + "}",
+                make_expression(Expression::Kind::dictionary, map_type,
+                                "std::string|" + cpp_type(value_type),
+                                std::move(entries))));
+            continue;
+        }
+        if (bound[i]) {
+            if (!can_assign(expected, bound[i]->type)) {
+                throw ParseError(line, "argument for parameter '" +
+                                           signature.parameter_names[i] + "' of '" + name +
+                                           "' must have type " + cpp_type(expected));
+            }
+            auto actual = std::move(*bound[i]);
+            actual.ast = converted_expression(expected, actual.type, actual.ast);
+            actual.cpp = converted_value(expected, actual.type, actual.cpp);
+            actual.type = expected;
+            result.push_back(std::move(actual));
+        } else if (signature.default_values[i]) {
+            result.push_back(make_expr_value(
+                expected, *signature.default_values[i],
+                *signature.default_expressions[i]));
+        } else {
+            throw ParseError(line, "missing required argument '" +
+                                       signature.parameter_names[i] + "' for '" + name + "'");
+        }
+    }
+    return result;
+}
+
 std::size_t find_assignment_operator(const std::string& text) {
     bool in_string = false;
     bool escaped = false;
@@ -550,6 +718,29 @@ private:
         if (peek().text != symbol) return false;
         ++position_;
         return true;
+    }
+
+    std::vector<CallArgument> parse_named_call_arguments() {
+        std::vector<CallArgument> arguments;
+        bool saw_named = false;
+        if (accept(")")) return arguments;
+        while (true) {
+            std::optional<std::string> name;
+            if (peek().kind == Token::Kind::identifier &&
+                position_ + 1 < tokens_.size() &&
+                tokens_[position_ + 1].text == "=") {
+                name = take().text;
+                take();
+                saw_named = true;
+            } else if (saw_named) {
+                throw ParseError(line_, "positional arguments cannot follow named arguments");
+            }
+            arguments.push_back({std::move(name), parse_binary(1)});
+            if (!accept(",")) break;
+            if (peek().text == ")") break;
+        }
+        if (!accept(")")) throw ParseError(line_, "expected ')' after arguments");
+        return arguments;
     }
 
     static bool is_logical_operator(const Token& token) {
@@ -744,10 +935,10 @@ private:
         if (peek().kind == Token::Kind::string) {
             const auto token = take();
             if (token.fstring) return parse_fstring(token.text);
-            return make_expr_value(
+            return parse_postfix(make_expr_value(
                 Type::string, "std::string(" + cpp_string(token.text) + ")",
                 make_expression(Expression::Kind::string_literal, Type::string, token.text),
-                token.text);
+                token.text));
         }
         if (peek().kind == Token::Kind::identifier) {
             const auto identifier = take();
@@ -917,51 +1108,21 @@ private:
                 if (!signature->second.return_type) {
                     throw ParseError(line_, "function '" + name + "' does not return a value");
                 }
-                std::vector<ExprValue> arguments;
-                if (!accept(")")) {
-                    do {
-                        arguments.push_back(parse_binary(1));
-                    } while (accept(","));
-                    if (!accept(")")) {
-                        throw ParseError(line_, "expected ')' after function arguments");
-                    }
-                }
-                validate_call_arity(name, signature->second, arguments.size(), line_);
+                const auto supplied = parse_named_call_arguments();
+                const auto arguments = bind_call_arguments(name, signature->second,
+                                                           supplied, line_);
                 std::ostringstream call;
                 const auto cpp_name = signature->second.cpp_name.empty()
                                           ? "sun_fn_" + name
                                           : signature->second.cpp_name;
                 call << cpp_name << '(';
                 for (std::size_t i = 0; i < arguments.size(); ++i) {
-                    if (!can_assign(signature->second.parameters[i], arguments[i].type)) {
-                        throw ParseError(line_, "argument " + std::to_string(i + 1) +
-                                                 " of '" + name + "' must have type " +
-                                                 cpp_type(signature->second.parameters[i]));
-                    }
                     if (i) call << ", ";
-                    call << converted_value(signature->second.parameters[i],
-                                            arguments[i].type, arguments[i].cpp);
-                }
-                for (std::size_t i = arguments.size();
-                     i < signature->second.parameters.size(); ++i) {
-                    if (!signature->second.default_values[i]) {
-                        throw ParseError(line_, "missing default value for parameter " +
-                                                 std::to_string(i + 1) + " of '" + name + "'");
-                    }
-                    if (i) call << ", ";
-                    call << *signature->second.default_values[i];
+                    call << arguments[i].cpp;
                 }
                 call << ')';
                 std::vector<Expression> call_arguments;
-                for (std::size_t i = 0; i < arguments.size(); ++i) {
-                    call_arguments.push_back(converted_expression(
-                        signature->second.parameters[i], arguments[i].type, arguments[i].ast));
-                }
-                for (std::size_t i = arguments.size();
-                     i < signature->second.parameters.size(); ++i) {
-                    call_arguments.push_back(
-                        *signature->second.default_expressions[i]);
-                }
+                for (const auto& argument : arguments) call_arguments.push_back(argument.ast);
                 return parse_postfix(make_expr_value(
                     *signature->second.return_type, call.str(),
                     make_expression(Expression::Kind::call, *signature->second.return_type,
@@ -1184,6 +1345,56 @@ private:
                                     std::move(helper_arguments)));
                 continue;
             }
+            if (value.type == Type::string) {
+                if (peek().kind != Token::Kind::identifier) {
+                    throw ParseError(line_, "expected a string operation after '.'");
+                }
+                const auto operation = take().text;
+                if (operation != "upper" && operation != "lower" &&
+                    operation != "trim" && operation != "split" &&
+                    operation != "replace" && operation != "contains" &&
+                    operation != "starts_with" && operation != "ends_with") {
+                    throw ParseError(line_, "unknown string operation '" + operation + "'");
+                }
+                if (!accept("(")) {
+                    throw ParseError(line_, "string operations require parentheses");
+                }
+                if (!allow_function_calls_) {
+                    throw ParseError(line_, "default values cannot call functions");
+                }
+                const auto arguments = parse_expression_arguments();
+                const auto expected_count =
+                    operation == "replace" ? 2U :
+                    operation == "upper" || operation == "lower" || operation == "trim"
+                        ? 0U : 1U;
+                if (arguments.size() != expected_count ||
+                    std::any_of(arguments.begin(), arguments.end(),
+                                [](const ExprValue& argument) {
+                                    return argument.type != Type::string;
+                                })) {
+                    throw ParseError(line_, "string." + operation + " expects " +
+                                                std::to_string(expected_count) +
+                                                " string argument(s)");
+                }
+                const auto result_type = operation == "split" ? Type::list_string :
+                    operation == "contains" || operation == "starts_with" ||
+                            operation == "ends_with"
+                        ? Type::boolean : Type::string;
+                const auto helper = "sun_string_" + operation;
+                std::ostringstream code;
+                code << helper << '(' << value.cpp;
+                std::vector<Expression> helper_arguments{value.ast};
+                for (const auto& argument : arguments) {
+                    code << ", " << argument.cpp;
+                    helper_arguments.push_back(argument.ast);
+                }
+                code << ')';
+                value = make_expr_value(
+                    result_type, code.str(),
+                    make_expression(Expression::Kind::call, result_type, helper,
+                                    std::move(helper_arguments)));
+                continue;
+            }
             if (value.type.kind != Type::Kind::custom) {
                 throw ParseError(line_, "member access requires a class or struct value");
             }
@@ -1205,18 +1416,18 @@ private:
                     throw ParseError(line_, "void method '" + member +
                                              "' cannot be used as a value");
                 }
-                const auto arguments = parse_expression_arguments();
-                validate_call_arity(member, signature->second, arguments.size(), line_);
+                const auto supplied = parse_named_call_arguments();
+                const auto arguments = bind_call_arguments(member, signature->second,
+                                                           supplied, line_);
                 std::ostringstream call;
                 call << "(" << value.cpp << ")." << member << '(';
-                append_call_arguments(call, member, signature->second, arguments);
+                for (std::size_t i = 0; i < arguments.size(); ++i) {
+                    if (i) call << ", ";
+                    call << arguments[i].cpp;
+                }
                 call << ')';
                 std::vector<Expression> call_arguments{value.ast};
-                for (std::size_t i = 0; i < arguments.size(); ++i) {
-                    call_arguments.push_back(converted_expression(
-                        signature->second.parameters[i], arguments[i].type,
-                        arguments[i].ast));
-                }
+                for (const auto& argument : arguments) call_arguments.push_back(argument.ast);
                 value = make_expr_value(
                     *signature->second.return_type, call.str(),
                     make_expression(Expression::Kind::member_call,
@@ -1243,7 +1454,7 @@ private:
         if (!allow_function_calls_) {
             throw ParseError(line_, "default values cannot construct objects");
         }
-        const auto arguments = parse_expression_arguments();
+        const auto supplied = parse_named_call_arguments();
         const auto init = std::find_if(definition.methods.begin(), definition.methods.end(),
                                        [](const Function& method) {
                                            return method.name == "init";
@@ -1252,26 +1463,29 @@ private:
             std::vector<Expression> constructor_arguments;
             std::ostringstream construction;
             construction << "SunType_" << definition.name << '(';
+            std::vector<ExprValue> arguments;
             if (init != definition.methods.end()) {
                 const auto signature = signatures_.find(definition.name + ".init");
                 if (signature == signatures_.end()) {
                     throw std::logic_error("error class initializer signature is missing");
                 }
-                append_call_arguments(construction, definition.name, signature->second,
-                                      arguments);
-                for (std::size_t i = 0; i < arguments.size(); ++i) {
-                    constructor_arguments.push_back(converted_expression(
-                        signature->second.parameters[i], arguments[i].type,
-                        arguments[i].ast));
-                }
+                arguments = bind_call_arguments(definition.name, signature->second,
+                                                supplied, line_);
             } else {
-                if (arguments.size() != 1 || arguments.front().type != Type::string) {
-                    throw ParseError(
-                        line_, "error constructor '" + definition.name +
-                                   "' expects one string message");
-                }
-                construction << arguments.front().cpp;
-                constructor_arguments.push_back(arguments.front().ast);
+                Signature signature;
+                signature.parameters.push_back(Type::string);
+                signature.parameter_names.push_back("message");
+                signature.variadic_positional.push_back(false);
+                signature.variadic_keyword.push_back(false);
+                signature.variadic_value_types.push_back(Type::string);
+                signature.default_values.push_back(std::nullopt);
+                signature.default_expressions.push_back(std::nullopt);
+                arguments = bind_call_arguments(definition.name, signature, supplied, line_);
+            }
+            for (const auto& argument : arguments) {
+                if (!constructor_arguments.empty()) construction << ", ";
+                construction << argument.cpp;
+                constructor_arguments.push_back(argument.ast);
             }
             construction << ')';
             const auto type = types_.at(definition.name);
@@ -1283,16 +1497,18 @@ private:
         }
         if (definition.is_class && init != definition.methods.end()) {
             const auto signature = signatures_.find(definition.name + ".init");
-            validate_call_arity(definition.name, signature->second, arguments.size(), line_);
+            const auto arguments = bind_call_arguments(definition.name, signature->second,
+                                                       supplied, line_);
             std::ostringstream call;
             call << "sun_make_" << definition.name << '(';
-            append_call_arguments(call, definition.name, signature->second, arguments);
+            for (std::size_t i = 0; i < arguments.size(); ++i) {
+                if (i) call << ", ";
+                call << arguments[i].cpp;
+            }
             call << ')';
             std::vector<Expression> constructor_arguments;
-            for (std::size_t i = 0; i < arguments.size(); ++i) {
-                constructor_arguments.push_back(converted_expression(
-                    signature->second.parameters[i], arguments[i].type,
-                    arguments[i].ast));
+            for (const auto& argument : arguments) {
+                constructor_arguments.push_back(argument.ast);
             }
             return make_expr_value(
                 types_.at(definition.name), call.str(),
@@ -1300,6 +1516,18 @@ private:
                                 "sun_make_" + definition.name,
                                 std::move(constructor_arguments)));
         }
+        Signature field_signature;
+        for (const auto& field : definition.fields) {
+            field_signature.parameters.push_back(field.type);
+            field_signature.parameter_names.push_back(field.name);
+            field_signature.variadic_positional.push_back(false);
+            field_signature.variadic_keyword.push_back(false);
+            field_signature.variadic_value_types.push_back(field.type);
+            field_signature.default_values.push_back(std::nullopt);
+            field_signature.default_expressions.push_back(std::nullopt);
+        }
+        const auto arguments = bind_call_arguments(definition.name, field_signature,
+                                                   supplied, line_);
         if (arguments.size() != definition.fields.size()) {
             throw ParseError(line_, "constructor '" + definition.name + "' expects " +
                                      std::to_string(definition.fields.size()) +
@@ -1337,22 +1565,6 @@ private:
             if (!accept(")")) throw ParseError(line_, "expected ')' after arguments");
         }
         return arguments;
-    }
-
-    void append_call_arguments(std::ostringstream& call, const std::string& name,
-                               const Signature& signature,
-                               const std::vector<ExprValue>& arguments) const {
-        validate_call_arity(name, signature, arguments.size(), line_);
-        for (std::size_t i = 0; i < arguments.size(); ++i) {
-            if (!can_assign(signature.parameters[i], arguments[i].type)) {
-                throw ParseError(line_, "argument " + std::to_string(i + 1) +
-                                         " of '" + name + "' must have type " +
-                                         cpp_type(signature.parameters[i]));
-            }
-            if (i) call << ", ";
-            call << converted_value(signature.parameters[i], arguments[i].type,
-                                    arguments[i].cpp);
-        }
     }
 
     ExprValue parse_input_call() {
@@ -2064,9 +2276,7 @@ public:
                 }
                 Signature signature;
                 for (const auto& parameter : function.parameters) {
-                    signature.parameters.push_back(parameter.type);
-                    signature.default_values.push_back(std::nullopt);
-                    signature.default_expressions.push_back(std::nullopt);
+                    add_signature_parameter(signature, parameter);
                 }
                 signature.return_type = function.return_type;
                 if (!signatures_.emplace(function.name, signature).second) {
@@ -2229,9 +2439,7 @@ private:
                     }
                     Signature signature;
                     for (const auto& parameter : method.parameters) {
-                        signature.parameters.push_back(parameter.type);
-                        signature.default_values.push_back(std::nullopt);
-                        signature.default_expressions.push_back(std::nullopt);
+                        add_signature_parameter(signature, parameter);
                     }
                     signature.return_type = method.return_type;
                     if (!signatures_.emplace(range.name + "." + method.name,
@@ -2471,25 +2679,65 @@ private:
         function.line = line.number;
         std::unordered_map<std::string, bool> seen;
         bool saw_default = false;
+        bool saw_variadic_positional = false;
+        bool saw_variadic_keyword = false;
         for (const auto& parameter_text : split_arguments(call.second, line.number)) {
             const auto equals = find_assignment_operator(parameter_text);
             const auto declaration = trim(parameter_text.substr(0, equals));
             const auto colon = declaration.find(':');
-            const auto name = trim(declaration.substr(0, colon));
+            auto name_text = trim(declaration.substr(0, colon));
+            const bool variadic_keyword = name_text.rfind("**", 0) == 0;
+            const bool variadic_positional = !variadic_keyword &&
+                                             name_text.rfind("*", 0) == 0;
+            if (variadic_keyword) name_text = trim(name_text.substr(2));
+            else if (variadic_positional) name_text = trim(name_text.substr(1));
+            const auto name = name_text;
             if (!is_identifier(name)) {
                 throw ParseError(line.number, "invalid parameter name '" + name + "'");
             }
             if (!seen.emplace(name, true).second) {
                 throw ParseError(line.number, "duplicate parameter '" + name + "'");
             }
-            const auto type = colon == std::string::npos
-                                  ? Type::string
-                                  : parse_type(trim(declaration.substr(colon + 1)), line.number,
-                                               types_);
+            if ((saw_variadic_positional || saw_variadic_keyword) &&
+                !variadic_keyword && !variadic_positional) {
+                throw ParseError(line.number,
+                                 "variadic parameters must follow all regular parameters");
+            }
+            if (variadic_positional && (saw_variadic_positional || saw_variadic_keyword)) {
+                throw ParseError(line.number,
+                                 "a function may declare only one *args parameter before **kwargs");
+            }
+            if (variadic_keyword && saw_variadic_keyword) {
+                throw ParseError(line.number, "a function may declare only one **kwargs parameter");
+            }
+            if ((variadic_positional || variadic_keyword) && colon == std::string::npos) {
+                throw ParseError(line.number,
+                                 "variadic parameters require an explicit scalar type");
+            }
+            const auto declared_type = colon == std::string::npos
+                                          ? Type::string
+                                          : parse_type(trim(declaration.substr(colon + 1)),
+                                                       line.number, types_);
+            if ((variadic_positional || variadic_keyword) &&
+                (declared_type.kind == Type::Kind::custom ||
+                 declared_type == Type::region || is_list_type(declared_type) ||
+                 is_dictionary_type(declared_type) || is_tuple_type(declared_type))) {
+                throw ParseError(line.number,
+                                 "variadic parameters currently support scalar types only");
+            }
+            const auto type = variadic_positional
+                                  ? list_type_for(declared_type)
+                              : variadic_keyword
+                                  ? Type{Type::Kind::dictionary,
+                                         "string," + scalar_type_name(declared_type)}
+                                  : declared_type;
             if (type == Type::region && !memory_imported_) {
                 throw ParseError(line.number, "the region type requires 'import memory'");
             }
             std::optional<std::string> default_value;
+            if ((variadic_positional || variadic_keyword) && equals != std::string::npos) {
+                throw ParseError(line.number, "variadic parameters cannot have defaults");
+            }
             if (equals != std::string::npos) {
                 const auto source = trim(parameter_text.substr(equals + 1));
                 if (source.empty()) {
@@ -2498,11 +2746,15 @@ private:
                 }
                 default_value = source;
                 saw_default = true;
-            } else if (saw_default) {
+            } else if (saw_default && !variadic_positional && !variadic_keyword) {
                 throw ParseError(line.number,
                                  "parameters without defaults cannot follow parameters with defaults");
             }
-            function.parameters.push_back({name, type, default_value});
+            function.parameters.push_back(
+                {name, type, default_value, variadic_positional, variadic_keyword,
+                 declared_type});
+            saw_variadic_positional = saw_variadic_positional || variadic_positional;
+            saw_variadic_keyword = saw_variadic_keyword || variadic_keyword;
         }
         return function;
     }
@@ -2641,9 +2893,7 @@ private:
         const auto cpp_name = "sun_local_function_" + std::to_string(id);
         Signature signature;
         for (const auto& parameter : function.parameters) {
-            signature.parameters.push_back(parameter.type);
-            signature.default_values.push_back(std::nullopt);
-            signature.default_expressions.push_back(std::nullopt);
+            add_signature_parameter(signature, parameter);
         }
         signature.return_type = function.return_type;
         signature.cpp_name = cpp_name;
@@ -2692,6 +2942,36 @@ private:
                          bool math_imported) const {
         return ExpressionParser(text, line, symbols, math_imported, memory_imported_, io_imported_,
                                 signatures_, types_, custom_types_).parse();
+    }
+
+    std::vector<CallArgument> parse_call_arguments(
+        const std::vector<std::string>& sources, std::size_t line,
+        const Symbols& symbols, bool math_imported) const {
+        std::vector<CallArgument> arguments;
+        bool saw_named = false;
+        for (const auto& source : sources) {
+            const auto equals = find_assignment_operator(source);
+            std::optional<std::string> name;
+            std::string value_source = source;
+            if (equals != std::string::npos) {
+                const auto candidate = trim(source.substr(0, equals));
+                if (!is_identifier(candidate)) {
+                    throw ParseError(line, "invalid named argument '" + candidate + "'");
+                }
+                name = candidate;
+                value_source = trim(source.substr(equals + 1));
+                saw_named = true;
+                if (value_source.empty()) {
+                    throw ParseError(line, "named argument '" + candidate +
+                                               "' requires a value");
+                }
+            } else if (saw_named) {
+                throw ParseError(line, "positional arguments cannot follow named arguments");
+            }
+            arguments.push_back({std::move(name),
+                                 expression(value_source, line, symbols, math_imported)});
+        }
+        return arguments;
     }
 
     ExprValue parse_condition(const SourceLine& line, const std::string& keyword,
@@ -3749,27 +4029,15 @@ private:
             throw ParseError(line.number, "method '" + method +
                                            "' returns a value; use it in an expression");
         }
-        std::vector<ExprValue> arguments;
-        for (const auto& argument : split_arguments(call.second, line.number)) {
-            arguments.push_back(expression(argument, line.number, symbols, math_imported));
-        }
-        validate_call_arity(method, signature->second, arguments.size(), line.number);
+        const auto supplied = parse_call_arguments(
+            split_arguments(call.second, line.number), line.number, symbols, math_imported);
+        const auto arguments = bind_call_arguments(method, signature->second,
+                                                  supplied, line.number);
         std::ostringstream code;
         code << "(" << object.cpp << ")." << method << '(';
         for (std::size_t i = 0; i < arguments.size(); ++i) {
-            if (!can_assign(signature->second.parameters[i], arguments[i].type)) {
-                throw ParseError(line.number, "argument " + std::to_string(i + 1) +
-                                               " to '" + method + "' must have type " +
-                                               cpp_type(signature->second.parameters[i]));
-            }
             if (i) code << ", ";
-            code << converted_value(signature->second.parameters[i], arguments[i].type,
-                                    arguments[i].cpp);
-        }
-        for (std::size_t i = arguments.size();
-             i < signature->second.parameters.size(); ++i) {
-            if (i) code << ", ";
-            code << *signature->second.default_values[i];
+            code << arguments[i].cpp;
         }
         code << ");";
         return code.str();
@@ -3784,33 +4052,18 @@ private:
                              "Check the spelling or declare the function with 'def " +
                                  call.first + "(...)'.");
         }
-        std::vector<ExprValue> values;
-        for (const auto& argument : split_arguments(call.second, line.number)) {
-            values.push_back(expression(argument, line.number, symbols, math_imported));
-        }
-        validate_call_arity(call.first, signature->second, values.size(), line.number);
+        const auto supplied = parse_call_arguments(
+            split_arguments(call.second, line.number), line.number, symbols, math_imported);
+        const auto values = bind_call_arguments(call.first, signature->second,
+                                                supplied, line.number);
         std::ostringstream code;
         code << (signature->second.cpp_name.empty()
                      ? "sun_fn_" + call.first
                      : signature->second.cpp_name)
              << '(';
         for (std::size_t i = 0; i < values.size(); ++i) {
-            if (!can_assign(signature->second.parameters[i], values[i].type)) {
-                throw ParseError(line.number, "argument " + std::to_string(i + 1) +
-                                               " of '" + call.first + "' must have type " +
-                                               cpp_type(signature->second.parameters[i]));
-            }
             if (i) code << ", ";
-            code << converted_value(signature->second.parameters[i],
-                                    values[i].type, values[i].cpp);
-        }
-        for (std::size_t i = values.size(); i < signature->second.parameters.size(); ++i) {
-            if (!signature->second.default_values[i]) {
-                throw ParseError(line.number, "missing default value for parameter " +
-                                               std::to_string(i + 1) + " of '" + call.first + "'");
-            }
-            if (i) code << ", ";
-            code << *signature->second.default_values[i];
+            code << values[i].cpp;
         }
         code << ");";
         return code.str();

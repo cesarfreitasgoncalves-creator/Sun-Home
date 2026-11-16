@@ -37,6 +37,8 @@ em [HOWUSE.md](HOWUSE.md).
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
+- Argumentos nomeados em funcoes/metodos Sun e construtores de tipos; parametros
+  tipados `*args`/`**kwargs` para coletar argumentos extras.
 - `sum`, `all`, `any`, `min`, `max` e `round` como funcoes integradas tipadas.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
@@ -48,7 +50,8 @@ em [HOWUSE.md](HOWUSE.md).
   campos, metodos e `init`; `export def` controla a API publica de modulos, e
   classes de erro podem herdar de `AnError`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
-- Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
+- Strings concatenadas com `+`, f-strings e operacoes de transformacao, busca,
+  substituicao e divisao.
 - Interpolacao `%v` com argumentos nomeados, como
   `print("Ola, %v", %v=nome)`.
 - Erros de compilacao com arquivo, linha, coluna, trecho destacado e sugestoes.

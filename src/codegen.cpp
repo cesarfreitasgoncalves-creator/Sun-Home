@@ -286,7 +286,7 @@ std::string render_block(const Block& statements, std::size_t spaces) {
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <algorithm>\n#include <cmath>\n#include <cstdint>\n#include <exception>\n#include <iostream>\n#include <limits>\n"
+    out << "#include <algorithm>\n#include <cctype>\n#include <cmath>\n#include <cstdint>\n#include <exception>\n#include <iostream>\n#include <limits>\n"
            "#include <map>\n#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <functional>\n#include <string>\n#include <type_traits>\n#include <utility>\n"
            "#include <tuple>\n#include <variant>\n#include <vector>\n";
@@ -323,6 +323,74 @@ class SunRuntimeError : public AnError {
 public:
     using AnError::AnError;
 };
+
+std::string sun_string_upper(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+    return value;
+}
+
+std::string sun_string_lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+std::string sun_string_trim(const std::string& value) {
+    const auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+    const auto first = std::find_if_not(value.begin(), value.end(), is_space);
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), is_space).base();
+    return first < last ? std::string(first, last) : std::string{};
+}
+
+std::vector<std::string> sun_string_split(const std::string& value,
+                                          const std::string& separator) {
+    if (separator.empty()) throw SunRuntimeError("string.split separator cannot be empty");
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (true) {
+        const auto next = value.find(separator, start);
+        if (next == std::string::npos) {
+            parts.push_back(value.substr(start));
+            break;
+        }
+        parts.push_back(value.substr(start, next - start));
+        start = next + separator.size();
+    }
+    return parts;
+}
+
+std::string sun_string_replace(const std::string& value, const std::string& old_value,
+                               const std::string& new_value) {
+    if (old_value.empty()) throw SunRuntimeError("string.replace search text cannot be empty");
+    std::string result;
+    std::size_t start = 0;
+    while (true) {
+        const auto next = value.find(old_value, start);
+        if (next == std::string::npos) {
+            result.append(value, start, std::string::npos);
+            break;
+        }
+        result.append(value, start, next - start);
+        result += new_value;
+        start = next + old_value.size();
+    }
+    return result;
+}
+
+bool sun_string_contains(const std::string& value, const std::string& part) {
+    return value.find(part) != std::string::npos;
+}
+
+bool sun_string_starts_with(const std::string& value, const std::string& prefix) {
+    return value.size() >= prefix.size() &&
+           value.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool sun_string_ends_with(const std::string& value, const std::string& suffix) {
+    return value.size() >= suffix.size() &&
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 class SunCppException : public std::exception {
 public:

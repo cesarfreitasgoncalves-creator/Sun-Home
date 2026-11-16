@@ -310,6 +310,194 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "Hello, Sun!\n\n")
 
+    def test_named_arguments_work_for_functions_methods_and_constructors(self):
+        result = self.invoke(
+            "named-arguments.su",
+            "def describe(name: string, age: int = int(0)): string\n"
+            '    return f"{name}:{age}"\n'
+            "end\n"
+            "class Counter\n"
+            "    value: int\n"
+            "    def init(start: int)\n"
+            "        self.value = start\n"
+            "    end\n"
+            "    def add(amount: int)\n"
+            "        self.value = self.value + amount\n"
+            "    end\n"
+            "    def current(): int\n"
+            "        return self.value\n"
+            "    end\n"
+            "    def plus(amount: int): int\n"
+            "        return self.value + amount\n"
+            "    end\n"
+            "end\n"
+            "struct Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "end\n"
+            'print(describe(age=int(21), name="Ada"))\n'
+            'print(describe("Lin"))\n'
+            "let counter: Counter = Counter(start=int(3))\n"
+            "counter.add(amount=int(4))\n"
+            "print(counter.current())\n"
+            "print(counter.plus(amount=int(2)))\n"
+            "let point: Point = Point(y=int(8), x=int(5))\n"
+            "print(point.x + point.y)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "named-arguments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Ada:21\nLin:0\n7\n9\n13\n")
+
+    def test_named_argument_validation(self):
+        cases = [
+            (
+                "unknown-named-argument",
+                "def greet(name: string)\n"
+                "    print(name)\n"
+                "end\n"
+                'greet(user="Ada")\n',
+                "unknown named argument 'user'",
+            ),
+            (
+                "duplicate-named-argument",
+                "def greet(name: string)\n"
+                "    print(name)\n"
+                "end\n"
+                'greet("Ada", name="Lin")\n',
+                "multiple values for parameter 'name'",
+            ),
+            (
+                "positional-after-named",
+                "def combine(first: int, second: int)\n"
+                "    print(first + second)\n"
+                "end\n"
+                "combine(first=int(1), int(2))\n",
+                "positional arguments cannot follow named arguments",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_typed_variadic_arguments_collect_positional_and_named_values(self):
+        result = self.invoke(
+            "variadic-arguments.su",
+            "def inspect(*values: int, **options: string)\n"
+            "    print(values)\n"
+            "    print(options)\n"
+            "end\n"
+            'inspect(int(2), int(3), label="items", mode="fast")\n'
+            "def local_test(): int\n"
+            "    def total(*values: int): int\n"
+            "        let result: int = int(0)\n"
+            "        for value in values:\n"
+            "            result = result + value\n"
+            "        end\n"
+            "        return result\n"
+            "    end\n"
+            "    return total(int(4), int(5), int(6))\n"
+            "end\n"
+            "print(local_test())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "variadic-arguments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "[2, 3]\n{label: items, mode: fast}\n15\n",
+        )
+
+    def test_variadic_parameters_require_valid_types_and_order(self):
+        cases = [
+            ("missing-variadic-type", "def collect(*values)\nend\n",
+             "variadic parameters require an explicit scalar type"),
+            ("regular-after-variadic",
+             "def collect(*values: int, other: int)\nend\n",
+             "variadic parameters must follow all regular parameters"),
+            ("duplicate-variadic",
+             "def collect(*values: int, *others: int)\nend\n",
+             "a function may declare only one *args parameter"),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_string_operations_cover_transform_search_replace_and_split(self):
+        result = self.invoke(
+            "string-operations.su",
+            'let text: string = "  Sun language  "\n'
+            'let clean: string = text.trim()\n'
+            'print("Hello".upper())\n'
+            'print(clean.upper())\n'
+            'print(clean.lower())\n'
+            'print(clean.replace("Sun", "Moon"))\n'
+            'print(clean.split(" "))\n'
+            'print(clean.contains("language"))\n'
+            'print(clean.starts_with("Sun"))\n'
+            'print(clean.ends_with("language"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "string-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "HELLO\nSUN LANGUAGE\nsun language\nMoon language\n[Sun, language]\n"
+            "true\ntrue\ntrue\n",
+        )
+
+    def test_string_split_and_replace_reject_empty_search_values_at_runtime(self):
+        for operation, expression, expected_error in [
+            ("split", '"a".split("")', "string.split separator cannot be empty"),
+            ("replace", '"a".replace("", "b")',
+             "string.replace search text cannot be empty"),
+        ]:
+            with self.subTest(operation=operation):
+                result = self.invoke(
+                    f"string-{operation}-empty.su",
+                    "try:\n"
+                    f"    print({expression})\n"
+                    "except AnError as error:\n"
+                    "    print(error)\n"
+                    "end\n",
+                    "--compile",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                executable = subprocess.run(
+                    [str(WORK / f"string-{operation}-empty")],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(executable.returncode, 0, executable.stderr)
+                self.assertEqual(executable.stdout, expected_error + "\n")
+
     def test_f_strings_interpolate_parameters_and_escape_braces(self):
         result = self.invoke(
             "f-string.su",

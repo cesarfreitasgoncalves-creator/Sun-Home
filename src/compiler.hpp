@@ -120,6 +120,9 @@ struct Parameter {
     std::string name;
     Type type;
     std::optional<std::string> default_value = std::nullopt;
+    bool variadic_positional = false;
+    bool variadic_keyword = false;
+    Type variadic_value_type = Type::string;
 };
 
 struct Statement;

@@ -124,6 +124,10 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* print = std::get_if<PrintStatement>(&statement.node)) {
         out << prefix << "std::cout << sun_to_string(" << emit_expression(print->value)
             << ") << '\\n';\n";
+    } else if (const auto* print = std::get_if<PrintColorStatement>(&statement.node)) {
+        out << prefix << "std::cout << " << cpp_string(print->color_prefix)
+            << " << " << emit_expression(print->value)
+            << " << \"\\x1b[0m\" << '\\n';\n";
     } else if (const auto* assertion = std::get_if<AssertStatement>(&statement.node)) {
         out << prefix << "if (!(" << emit_expression(assertion->condition)
             << ")) throw SunRuntimeError(\"assertion failed\");\n";

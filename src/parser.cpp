@@ -166,6 +166,138 @@ bool is_identifier(const std::string& text) {
     return true;
 }
 
+std::string ansi_sgr(const std::string& code, std::size_t line) {
+    if (code.empty()) {
+        throw ParseError(line, "ANSI color code cannot be empty");
+    }
+    std::size_t start = 0;
+    while (start < code.size()) {
+        const auto end = code.find(';', start);
+        const auto stop = end == std::string::npos ? code.size() : end;
+        if (stop == start) {
+            throw ParseError(line, "ANSI color code must contain numeric SGR values");
+        }
+        unsigned value = 0;
+        for (auto i = start; i < stop; ++i) {
+            if (code[i] < '0' || code[i] > '9') {
+                throw ParseError(line, "ANSI color code must contain numeric SGR values");
+            }
+            const auto digit = static_cast<unsigned>(code[i] - '0');
+            if (value > (255 - digit) / 10) {
+                throw ParseError(line, "ANSI SGR values must be between 0 and 255");
+            }
+            value = value * 10 + digit;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    if (code.back() == ';') {
+        throw ParseError(line, "ANSI color code must contain numeric SGR values");
+    }
+    return "\x1b[" + code + "m";
+}
+
+bool parse_rgb_component(const std::string& value, unsigned& result) {
+    if (value.empty()) return false;
+    result = 0;
+    for (const auto c : value) {
+        if (c < '0' || c > '9') return false;
+        const auto digit = static_cast<unsigned>(c - '0');
+        if (result > (255 - digit) / 10) return false;
+        result = result * 10 + digit;
+    }
+    return true;
+}
+
+std::string rgb_prefix(unsigned red, unsigned green, unsigned blue) {
+    return "\x1b[38;2;" + std::to_string(red) + ";" + std::to_string(green) +
+           ";" + std::to_string(blue) + "m";
+}
+
+std::string color_prefix(const std::string& color, const std::string& mode,
+                         std::size_t line) {
+    static const std::unordered_map<std::string, std::pair<std::string, std::string>> colors = {
+        {"red", {"31", "255,0,0"}},
+        {"blue", {"34", "0,0,255"}},
+        {"yellow", {"33", "255,255,0"}},
+        {"magenta", {"35", "255,0,255"}},
+        {"cyan", {"36", "0,255,255"}},
+    };
+    auto normalized = color;
+    for (auto& c : normalized) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    const auto named = colors.find(normalized);
+    if (named != colors.end()) {
+        if (!mode.empty() && mode != "ansi" && mode != "rgb") {
+            throw ParseError(line, "printc format must be 'ansi' or 'rgb'");
+        }
+        if (mode == "rgb") {
+            const auto& value = named->second.second;
+            const auto first = value.find(',');
+            const auto second = value.find(',', first + 1);
+            return rgb_prefix(std::stoul(value.substr(0, first)),
+                              std::stoul(value.substr(first + 1, second - first - 1)),
+                              std::stoul(value.substr(second + 1)));
+        }
+        return ansi_sgr(named->second.first, line);
+    }
+    if (!mode.empty()) {
+        throw ParseError(line, "printc format applies only to named colors");
+    }
+
+    if (color.size() == 7 && color.front() == '#') {
+        unsigned components[3]{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            unsigned component = 0;
+            for (std::size_t j = 1 + i * 2; j < 3 + i * 2; ++j) {
+                const auto c = color[j];
+                const unsigned digit = c >= '0' && c <= '9'
+                                           ? static_cast<unsigned>(c - '0')
+                                           : c >= 'a' && c <= 'f'
+                                                 ? static_cast<unsigned>(c - 'a' + 10)
+                                                 : c >= 'A' && c <= 'F'
+                                                       ? static_cast<unsigned>(c - 'A' + 10)
+                                                       : 16;
+                if (digit > 15) {
+                    throw ParseError(line, "RGB hex colors must use the form '#RRGGBB'");
+                }
+                component = component * 16 + digit;
+            }
+            components[i] = component;
+        }
+        return rgb_prefix(components[0], components[1], components[2]);
+    }
+
+    const auto first = color.find(',');
+    if (first != std::string::npos) {
+        const auto second = color.find(',', first + 1);
+        if (second == std::string::npos || color.find(',', second + 1) != std::string::npos) {
+            throw ParseError(line, "RGB colors must use the form 'red,green,blue'");
+        }
+        unsigned red = 0;
+        unsigned green = 0;
+        unsigned blue = 0;
+        if (!parse_rgb_component(trim(color.substr(0, first)), red) ||
+            !parse_rgb_component(trim(color.substr(first + 1, second - first - 1)), green) ||
+            !parse_rgb_component(trim(color.substr(second + 1)), blue)) {
+            throw ParseError(line, "RGB components must be integers between 0 and 255");
+        }
+        return rgb_prefix(red, green, blue);
+    }
+
+    if (color.size() >= 2 && color[0] == '\x1b' && color[1] == '[' &&
+        color.back() == 'm') {
+        const auto code = color.substr(2, color.size() - 3);
+        return ansi_sgr(code, line);
+    }
+    if (color.rfind("\\033[", 0) == 0 && color.back() == 'm') {
+        const auto code = color.substr(5, color.size() - 6);
+        return ansi_sgr(code, line);
+    }
+    return ansi_sgr(color, line);
+}
+
 bool is_cpp_identifier(const std::string& text) {
     static const std::set<std::string> keywords = {
         "alignas", "alignof", "and", "asm", "auto", "bool", "break", "case",
@@ -2458,8 +2590,9 @@ public:
             }
             if (declaration_depth == 0 && starts_word(lines_[i].text, "def")) {
                 auto function = parse_function_header(lines_[i]);
-                if (function.name == "print") {
-                    throw ParseError(function.line, "function name 'print' is reserved");
+                if (function.name == "print" || function.name == "printc") {
+                    throw ParseError(function.line, "function name '" + function.name +
+                                                       "' is reserved");
                 }
                 if (function.name == "istype") {
                     throw ParseError(function.line, "function name 'istype' is reserved");
@@ -3149,7 +3282,8 @@ private:
                                    bool math_imported) {
         const auto line = lines_[index];
         auto function = parse_function_header(line);
-        if (function.name == "print" || function.name == "istype" ||
+        if (function.name == "print" || function.name == "printc" ||
+            function.name == "istype" ||
             function.name == "assert") {
             throw ParseError(line.number, "function name '" + function.name + "' is reserved");
         }
@@ -4085,6 +4219,35 @@ private:
         return {std::move(value)};
     }
 
+    PrintColorStatement parse_printc(const SourceLine& line,
+                                     const std::string& arguments_text,
+                                     const Symbols& symbols, bool math_imported) const {
+        const auto arguments = split_arguments(arguments_text, line.number);
+        if (arguments.size() < 2 || arguments.size() > 3) {
+            throw ParseError(line.number, "expected printc(string, color[, format])");
+        }
+        const auto value = expression(arguments[0], line.number, symbols, math_imported);
+        if (value.type != Type::string) {
+            throw ParseError(line.number, "printc text must be a string or f-string");
+        }
+        const auto color = expression(arguments[1], line.number, symbols, math_imported);
+        if (color.type != Type::string || !color.plain_string) {
+            throw ParseError(line.number, "printc color must be a quoted string literal");
+        }
+        std::string mode;
+        if (arguments.size() == 3) {
+            const auto format = expression(arguments[2], line.number, symbols, math_imported);
+            if (format.type != Type::string || !format.plain_string) {
+                throw ParseError(line.number, "printc format must be a quoted string literal");
+            }
+            mode = *format.plain_string;
+            for (auto& c : mode) {
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            }
+        }
+        return {value.ast, color_prefix(*color.plain_string, mode, line.number)};
+    }
+
     AssertStatement parse_assert(const SourceLine& line, const std::string& arguments_text,
                                  const Symbols& symbols, bool math_imported) const {
         const auto arguments = split_arguments(arguments_text, line.number);
@@ -4523,6 +4686,15 @@ private:
             auto result = parse_assignment(line, symbols, math_imported);
             ++index;
             return result;
+        }
+        if (starts_word(text, "printc")) {
+            const auto call = parse_call(text, line.number);
+            if (call.first != "printc") {
+                throw ParseError(line.number, "expected printc(string, color[, format])");
+            }
+            auto result = parse_printc(line, call.second, symbols, math_imported);
+            ++index;
+            return Statement{std::move(result), line.number};
         }
         if (starts_word(text, "print")) {
             const auto call = parse_call(text, line.number);

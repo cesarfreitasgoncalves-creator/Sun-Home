@@ -160,6 +160,11 @@ struct PrintStatement {
     Expression value;
 };
 
+struct PrintColorStatement {
+    Expression value;
+    std::string color_prefix;
+};
+
 struct AssertStatement {
     Expression condition;
 };
@@ -248,9 +253,9 @@ struct TryCatchStatement {
 };
 
 struct Statement {
-    using Node = std::variant<RawStatement, PrintStatement, DictionaryAssignmentStatement,
-                              AssertStatement, RaiseStatement, IfStatement, MatchStatement,
-                              LocalFunctionStatement,
+    using Node = std::variant<RawStatement, PrintStatement, PrintColorStatement,
+                              DictionaryAssignmentStatement, AssertStatement, RaiseStatement,
+                              IfStatement, MatchStatement, LocalFunctionStatement,
                               WhileStatement, RangeForStatement,
                               ForEachStatement, TryCatchStatement>;
 

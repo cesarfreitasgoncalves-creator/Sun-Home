@@ -164,6 +164,26 @@ print(title.upper())
 print(title.split(" "))
 ```
 
+### Impressao colorida
+
+`printc(texto, cor[, formato])` imprime uma string ou f-string em cor e restaura
+a cor padrao do terminal ao final. Cores nomeadas aceitas: `red`, `blue`,
+`yellow`, `magenta` e `cyan`. Por padrao elas usam codigos ANSI; o terceiro
+argumento pode ser `"rgb"` para usar ANSI truecolor ou `"ansi"` para selecionar
+explicitamente a paleta ANSI:
+
+```sun
+let name: string = "Sun"
+printc("Aviso", "yellow")
+printc(f"Ola, {name}", "cyan", "rgb")
+```
+
+Tambem e possivel passar diretamente um codigo ANSI SGR entre aspas
+(`"1;35"` ou `"\\033[35m"`), um RGB decimal (`"255,80,10"`) ou hexadecimal
+(`"#FF500A"`). Esses codigos sao identificados automaticamente; o terceiro
+argumento so se aplica a cores nomeadas. Os componentes RGB e os valores SGR
+devem estar entre 0 e 255.
+
 ### F-strings
 
 Coloque `f` antes das aspas e escreva expressoes Sun entre chaves:

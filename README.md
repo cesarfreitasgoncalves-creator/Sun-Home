@@ -33,7 +33,7 @@ em [HOWUSE.md](HOWUSE.md).
 - Funcoes aninhadas com captura de variaveis externas por referencia.
 - `input(prompt, tipo)`, `try`/`catch` legado e `except` tipado, com erros
   personalizados baseados em `AnError`, `raise` e `cppCatcher` para excecoes
-  de blocos `inline cpp`.
+  de blocos `inline cpp`; `finally` para executar limpeza ao sair do bloco.
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
@@ -41,10 +41,12 @@ em [HOWUSE.md](HOWUSE.md).
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
   verificacao de bounds para leitura e escrita.
-- `import io` para leitura, escrita, append e verificacao de arquivos.
-- `import sys` para argumentos do executavel, identificacao da plataforma e saida.
+- `import io` para leitura de texto/linhas, escrita, diretorios e metadados de
+  arquivos.
+- `import sys` para argumentos, ambiente, diretorio atual, plataforma e saida.
 - Imports de modulos locais com alias, structs, enums e classes simples com
-  campos, metodos e `init`; classes de erro podem herdar de `AnError`.
+  campos, metodos e `init`; `export def` controla a API publica de modulos, e
+  classes de erro podem herdar de `AnError`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+` e f-strings como `f"Ola, {nome}!"`.
 - Interpolacao `%v` com argumentos nomeados, como

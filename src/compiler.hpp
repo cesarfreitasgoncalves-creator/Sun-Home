@@ -28,6 +28,8 @@ enum class Keyword {
     try_,
     catch_,
     except_,
+    finally_,
+    export_,
     let_,
     return_,
     break_,
@@ -239,6 +241,7 @@ struct TryExceptClause {
 struct TryCatchStatement {
     Block try_body;
     std::vector<TryExceptClause> handlers;
+    std::optional<Block> finally_body;
 };
 
 struct Statement {

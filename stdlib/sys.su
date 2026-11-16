@@ -1,5 +1,7 @@
 inline cpp:
 #include <cstdlib>
+#include <filesystem>
+#include <system_error>
 
 std::vector<std::string> sun_sys_arguments;
 
@@ -24,6 +26,24 @@ std::string sun_sys_platform() {
 #endif
 }
 
+std::string sun_sys_cwd() {
+    std::error_code error;
+    const auto path = std::filesystem::current_path(error);
+    if (error) {
+        throw std::runtime_error("sys.cwd failed: " + error.message());
+    }
+    return path.string();
+}
+
+std::string sun_sys_env(const std::string& name, const std::string& fallback) {
+    const auto* value = std::getenv(name.c_str());
+    return value ? std::string(value) : fallback;
+}
+
+bool sun_sys_env_exists(const std::string& name) {
+    return std::getenv(name.c_str()) != nullptr;
+}
+
 void sun_sys_exit(std::int64_t code) {
     if (code < std::numeric_limits<int>::min() ||
         code > std::numeric_limits<int>::max()) {
@@ -45,6 +65,30 @@ def platform(): string
     let result: string = ""
     inline cpp:
         result = sun_sys_platform();
+    endcpp
+    return result
+end
+
+def cwd(): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_cwd();
+    endcpp
+    return result
+end
+
+def env(name: string, fallback: string): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_env(name, fallback);
+    endcpp
+    return result
+end
+
+def env_exists(name: string): bool
+    let result: bool = false
+    inline cpp:
+        result = sun_sys_env_exists(name);
     endcpp
     return result
 end

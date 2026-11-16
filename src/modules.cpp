@@ -48,6 +48,11 @@ bool identifier_char(char c) {
     return identifier_start(c) || (c >= '0' && c <= '9');
 }
 
+bool has_export_prefix(const std::string& text) {
+    return text.size() >= 6 && text.compare(0, 6, "export") == 0 &&
+           (text.size() == 6 || text[6] == ' ' || text[6] == '\t');
+}
+
 std::string mangle_path(const fs::path& path) {
     std::string result = "sun_module";
     for (const auto c : path.generic_string()) {
@@ -124,6 +129,16 @@ std::string rewrite_names(const std::string& source,
                             i = member_end;
                             continue;
                         }
+                        auto call_start = member_end;
+                        while (call_start < line.size() &&
+                               (line[call_start] == ' ' || line[call_start] == '\t')) {
+                            ++call_start;
+                        }
+                        if (call_start < line.size() && line[call_start] == '(') {
+                            throw std::runtime_error(
+                                "module alias '" + word + "' does not export function '" +
+                                member + "'");
+                        }
                     }
                 }
             }
@@ -144,7 +159,8 @@ std::vector<std::string> lines_of(const std::string& source) {
 }
 
 std::string function_name(const std::string& line) {
-    const auto text = trim(line);
+    auto text = trim(line);
+    if (has_export_prefix(text)) text = trim(text.substr(6));
     if (keyword_at_start(text) != Keyword::def) return {};
     const auto start = std::string("def ").size();
     const auto open = text.find('(', start);
@@ -265,6 +281,9 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     const auto prefix = mangle_path(fs::relative(canonical, project_root));
     int declaration_depth = 0;
     bool declarations_in_cpp = false;
+    bool has_explicit_exports = false;
+    std::set<std::string> explicit_exports;
+    std::vector<std::string> module_functions;
     for (std::size_t i = first_content; i < lines.size(); ++i) {
         const auto text = trim(lines[i]);
         if (declarations_in_cpp) {
@@ -275,6 +294,16 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             declarations_in_cpp = true;
             continue;
         }
+        const bool is_explicit_export = has_export_prefix(text);
+        if (is_explicit_export) {
+            if (declaration_depth != 0) {
+                throw std::runtime_error("exported functions must be declared at module scope");
+            }
+            if (function_name(text).empty()) {
+                throw std::runtime_error("module exports must use 'export def name(...)'");
+            }
+            has_explicit_exports = true;
+        }
         if (text == "end") {
             if (declaration_depth > 0) --declaration_depth;
             continue;
@@ -283,9 +312,15 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
         if (!name.empty()) {
             const auto renamed = prefix + "_" + name;
             names.emplace(name, renamed);
-            loaded.exports.emplace(name, renamed);
+            module_functions.push_back(name);
+            if (is_explicit_export) explicit_exports.insert(name);
         }
         if (is_block_start(text)) ++declaration_depth;
+    }
+    for (const auto& name : module_functions) {
+        if (!has_explicit_exports || explicit_exports.find(name) != explicit_exports.end()) {
+            loaded.exports.emplace(name, names.at(name));
+        }
     }
 
     int function_depth = 0;
@@ -300,13 +335,20 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             in_cpp = true;
             continue;
         }
+        const bool is_explicit_export = has_export_prefix(text);
         if (function_depth == 0) {
             if (text.empty() || text[0] == '#') continue;
-            if (keyword_at_start(text) == Keyword::def) {
+            if (function_name(text).empty() && is_explicit_export) {
+                throw std::runtime_error("module exports must use 'export def name(...)'");
+            }
+            if (!function_name(text).empty()) {
                 function_depth = 1;
                 continue;
             }
             throw std::runtime_error("local modules may contain imports, functions, and global inline C++ only");
+        }
+        if (is_explicit_export) {
+            throw std::runtime_error("exported functions must be declared at module scope");
         }
         if (is_block_start(text)) ++function_depth;
         else if (text == "end") --function_depth;
@@ -315,7 +357,26 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     if (function_depth != 0) throw std::runtime_error("local module function is missing 'end'");
 
     std::string body;
-    for (std::size_t i = first_content; i < lines.size(); ++i) body += lines[i] + '\n';
+    bool in_module_cpp = false;
+    for (std::size_t i = first_content; i < lines.size(); ++i) {
+        auto line = lines[i];
+        const auto text = trim(line);
+        if (!in_module_cpp && has_export_prefix(text) &&
+            !function_name(text).empty()) {
+            const auto modifier = line.find("export");
+            auto modifier_end = modifier + std::string("export").size();
+            while (modifier_end < line.size() &&
+                   (line[modifier_end] == ' ' || line[modifier_end] == '\t')) {
+                ++modifier_end;
+            }
+            line.erase(modifier, modifier_end - modifier);
+        } else if (text == "inline cpp:") {
+            in_module_cpp = true;
+        } else if (in_module_cpp && text == "endcpp") {
+            in_module_cpp = false;
+        }
+        body += line + '\n';
+    }
     loaded.source = dependencies.str() + rewrite_names(body, names, aliases);
     loaded.math = math;
     loaded.memory = memory;

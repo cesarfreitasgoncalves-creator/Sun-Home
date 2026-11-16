@@ -1,3 +1,4 @@
+import os
 import pathlib
 import shutil
 import subprocess
@@ -6,7 +7,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMPILER = ROOT / "build" / "sun"
-WORK = ROOT / "build" / "test-sun"
+WORK = pathlib.Path(os.environ.get("SUN_TEST_WORK", ROOT / "build" / "test-sun"))
 
 
 class SunCompilerTests(unittest.TestCase):
@@ -413,6 +414,32 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "seven\nlarge 8\nsmall\n")
 
+    def test_math_additional_trigonometric_logarithmic_and_numeric_functions(self):
+        result = self.invoke(
+            "math-additions.su",
+            "import math\n"
+            "print(math.acos(1))\n"
+            "print(math.asin(0))\n"
+            "print(math.atan(0))\n"
+            "print(math.atan2(0, 1))\n"
+            "print(math.fmod(7, 4))\n"
+            "print(math.hypot(3, 4))\n"
+            "print(math.log10(100))\n"
+            "print(math.log2(8))\n"
+            "print(math.trunc(2.9))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "math-additions")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "0\n0\n0\n0\n3\n5\n2\n3\n2\n")
+
     def test_constant_expressions_are_folded_in_generated_cpp(self):
         result = self.invoke(
             "constant-folding.su",
@@ -682,6 +709,83 @@ class SunCompilerTests(unittest.TestCase):
             "Sun: int division by zero\n"
             "Sun: Sun error from inline\n",
         )
+
+    def test_finally_runs_after_normal_handled_and_return_paths(self):
+        result = self.invoke(
+            "finally.su",
+            "def return_value(): int\n"
+            "    try:\n"
+            "        return int(7)\n"
+            "    finally:\n"
+            '        print("return cleanup")\n'
+            "    end\n"
+            "end\n"
+            "print(return_value())\n"
+            "try:\n"
+            '    raise AnError("handled")\n'
+            "except AnError:\n"
+            '    print("caught")\n'
+            "finally:\n"
+            '    print("exception cleanup")\n'
+            "end\n"
+            "try:\n"
+            '    print("body")\n'
+            "finally:\n"
+            '    print("normal cleanup")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "finally")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "return cleanup\n7\ncaught\nexception cleanup\nbody\nnormal cleanup\n",
+        )
+
+    def test_finally_runs_before_unhandled_error_reaches_main(self):
+        result = self.invoke(
+            "finally-unhandled.su",
+            "try:\n"
+            '    raise AnError("unhandled")\n'
+            "finally:\n"
+            '    print("cleanup")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "finally-unhandled")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 1)
+        self.assertEqual(executable.stdout, "cleanup\n")
+        self.assertIn("unhandled", executable.stderr)
+
+    def test_finally_rejects_control_flow_that_would_escape_its_cleanup(self):
+        result = self.invoke(
+            "finally-return.su",
+            "def value(): int\n"
+            "    try:\n"
+            "        return int(1)\n"
+            "    finally:\n"
+            "        return int(2)\n"
+            "    end\n"
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("'return' is not allowed inside a 'finally' block",
+                      result.stderr)
 
     def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
         result = self.invoke(
@@ -1184,6 +1288,38 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.stdout, "true\nfalse\nHello Sun\n")
         self.assertEqual(target.read_text(encoding="utf-8"), "Hello Sun")
 
+    def test_io_lines_directories_file_size_and_remove(self):
+        directory = WORK / "io-extra-dir"
+        file_path = directory / "lines.txt"
+        result = self.invoke(
+            "io-extra.su",
+            "import io\n"
+            f'let directory: string = "{directory}"\n'
+            f'let path: string = "{file_path}"\n'
+            "print(io.create_directories(directory))\n"
+            'io.write_text(path, "first\\nsecond\\n")\n'
+            "print(io.is_directory(directory))\n"
+            "print(io.file_size(path))\n"
+            "print(io.read_lines(path))\n"
+            "print(io.remove(path))\n"
+            "print(io.exists(path))\n"
+            "print(io.remove(directory))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-extra")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\ntrue\n13\n[first, second]\ntrue\nfalse\ntrue\n",
+        )
+
     def test_io_requires_import_and_reports_read_errors(self):
         missing_import = self.invoke(
             "io-missing-import.su",
@@ -1410,6 +1546,56 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "9 5\n")
 
+    def test_local_modules_can_mark_public_exports_and_use_private_helpers(self):
+        (WORK / "public_tools.su").write_text(
+            "export def public_value(): int\n"
+            "    return private_helper()\n"
+            "end\n"
+            "def private_helper(): int\n"
+            "    return int(42)\n"
+            "end\n"
+            "def hidden_value(): int\n"
+            "    return int(99)\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "explicit-module-exports.su",
+            "import local/public_tools as tools\n"
+            "print(tools.public_value())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "explicit-module-exports")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "42\n")
+
+    def test_local_modules_reject_importing_unexported_functions(self):
+        (WORK / "private_tools.su").write_text(
+            "export def visible(): int\n"
+            "    return int(1)\n"
+            "end\n"
+            "def hidden(): int\n"
+            "    return int(2)\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "private-module-export.su",
+            "import local/private_tools as tools\n"
+            "print(tools.hidden())\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("module alias 'tools' does not export function 'hidden'",
+                      result.stderr)
+
     def test_local_modules_can_import_stdlib_io(self):
         (WORK / "file_tools.su").write_text(
             "import io\n"
@@ -1460,6 +1646,33 @@ class SunCompilerTests(unittest.TestCase):
             {"linux", "windows", "macos", "unix", "unknown"},
         )
         self.assertNotIn("unreachable", executable.stdout)
+
+    def test_sys_exposes_cwd_and_environment_helpers(self):
+        result = self.invoke(
+            "sys-environment.su",
+            "import sys\n"
+            "print(sys.cwd())\n"
+            'print(sys.env_exists("SUN_TEST_VALUE"))\n'
+            'print(sys.env("SUN_TEST_VALUE", "fallback"))\n'
+            'print(sys.env("SUN_MISSING_VALUE", "fallback"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        environment = os.environ.copy()
+        environment["SUN_TEST_VALUE"] = "present"
+        executable = subprocess.run(
+            [str(WORK / "sys-environment")],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            f"{ROOT}\ntrue\npresent\nfallback\n",
+        )
 
     def test_local_modules_can_import_sys_stdlib(self):
         (WORK / "cli_tools.su").write_text(

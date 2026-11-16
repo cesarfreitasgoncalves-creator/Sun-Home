@@ -241,19 +241,32 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
         emit_block(out, loop->body, spaces + 4);
         out << prefix << "}\n";
     } else if (const auto* attempt = std::get_if<TryCatchStatement>(&statement.node)) {
-        out << prefix << "try {\n";
-        emit_block(out, attempt->try_body, spaces + 4);
-        for (const auto& handler : attempt->handlers) {
-            out << prefix << "} catch (const " << handler.cpp_error_type << "& "
-                << handler.caught_error_name << ") {\n";
-            if (handler.message_name) {
-                out << std::string(spaces + 4, ' ') << "const std::string "
-                    << *handler.message_name << " = " << handler.caught_error_name
-                    << ".what();\n";
-            }
-            emit_block(out, handler.body, spaces + 4);
+        if (attempt->finally_body) {
+            out << prefix << "{\n"
+                << std::string(spaces + 4, ' ')
+                << "SunFinallyGuard sun_finally_guard([&]() {\n";
+            emit_block(out, *attempt->finally_body, spaces + 8);
+            out << std::string(spaces + 4, ' ') << "});\n";
         }
-        out << prefix << "}\n";
+        if (attempt->handlers.empty()) {
+            emit_block(out, attempt->try_body,
+                       spaces + (attempt->finally_body ? 4 : 0));
+        } else {
+            out << prefix << "try {\n";
+            emit_block(out, attempt->try_body, spaces + 4);
+            for (const auto& handler : attempt->handlers) {
+                out << prefix << "} catch (const " << handler.cpp_error_type << "& "
+                    << handler.caught_error_name << ") {\n";
+                if (handler.message_name) {
+                    out << std::string(spaces + 4, ' ') << "const std::string "
+                        << *handler.message_name << " = " << handler.caught_error_name
+                        << ".what();\n";
+                }
+                emit_block(out, handler.body, spaces + 4);
+            }
+            out << prefix << "}\n";
+        }
+        if (attempt->finally_body) out << prefix << "}\n";
     }
 }
 
@@ -273,7 +286,7 @@ std::string render_block(const Block& statements, std::size_t spaces) {
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <algorithm>\n#include <cmath>\n#include <cstdint>\n#include <iostream>\n#include <limits>\n"
+    out << "#include <algorithm>\n#include <cmath>\n#include <cstdint>\n#include <exception>\n#include <iostream>\n#include <limits>\n"
            "#include <map>\n#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <functional>\n#include <string>\n#include <type_traits>\n#include <utility>\n"
            "#include <tuple>\n#include <variant>\n#include <vector>\n";
@@ -281,6 +294,26 @@ std::string transpile(const Program& program) {
         out << "#include <filesystem>\n#include <fstream>\n#include <iterator>\n";
     }
     out << R"cpp(
+class SunFinallyGuard {
+public:
+    explicit SunFinallyGuard(std::function<void()> action)
+        : action_(std::move(action)), exceptions_on_entry_(std::uncaught_exceptions()) {}
+    SunFinallyGuard(const SunFinallyGuard&) = delete;
+    SunFinallyGuard& operator=(const SunFinallyGuard&) = delete;
+    ~SunFinallyGuard() noexcept(false) {
+        try {
+            action_();
+        } catch (...) {
+            if (std::uncaught_exceptions() > exceptions_on_entry_) return;
+            throw;
+        }
+    }
+
+private:
+    std::function<void()> action_;
+    int exceptions_on_entry_;
+};
+
 class AnError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;

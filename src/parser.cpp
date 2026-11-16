@@ -1607,6 +1607,34 @@ private:
                 make_expression(Expression::Kind::call, Type::boolean, "sun_io_exists",
                                 {arguments[0].ast}));
         }
+        if (name == "read_lines") {
+            if (arguments.size() != 1 || arguments[0].type != Type::string) {
+                throw ParseError(line_, "io.read_lines expects one string path");
+            }
+            return make_expr_value(
+                Type::list_string, "sun_io_read_lines(" + arguments[0].cpp + ")",
+                make_expression(Expression::Kind::call, Type::list_string,
+                                "sun_io_read_lines", {arguments[0].ast}));
+        }
+        if (name == "is_directory" || name == "remove" ||
+            name == "create_directories") {
+            if (arguments.size() != 1 || arguments[0].type != Type::string) {
+                throw ParseError(line_, "io." + name + " expects one string path");
+            }
+            return make_expr_value(
+                Type::boolean, "sun_io_" + name + "(" + arguments[0].cpp + ")",
+                make_expression(Expression::Kind::call, Type::boolean,
+                                "sun_io_" + name, {arguments[0].ast}));
+        }
+        if (name == "file_size") {
+            if (arguments.size() != 1 || arguments[0].type != Type::string) {
+                throw ParseError(line_, "io.file_size expects one string path");
+            }
+            return make_expr_value(
+                Type::integer, "sun_io_file_size(" + arguments[0].cpp + ")",
+                make_expression(Expression::Kind::call, Type::integer,
+                                "sun_io_file_size", {arguments[0].ast}));
+        }
         throw ParseError(line_, "unknown io function '" + name + "'");
     }
 
@@ -1718,11 +1746,16 @@ private:
             throw ParseError(line_, "default values cannot call functions");
         }
         static const std::unordered_map<std::string, std::pair<std::string, std::size_t>> functions = {
-            {"abs", {"std::abs", 1}}, {"ceil", {"std::ceil", 1}},
+            {"abs", {"std::abs", 1}}, {"acos", {"std::acos", 1}},
+            {"asin", {"std::asin", 1}}, {"atan", {"std::atan", 1}},
+            {"atan2", {"std::atan2", 2}}, {"ceil", {"std::ceil", 1}},
             {"cos", {"std::cos", 1}}, {"exp", {"std::exp", 1}},
-            {"floor", {"std::floor", 1}}, {"log", {"std::log", 1}},
+            {"floor", {"std::floor", 1}}, {"fmod", {"std::fmod", 2}},
+            {"hypot", {"std::hypot", 2}}, {"log", {"std::log", 1}},
+            {"log10", {"std::log10", 1}}, {"log2", {"std::log2", 1}},
             {"pow", {"std::pow", 2}}, {"sin", {"std::sin", 1}},
             {"sqrt", {"std::sqrt", 1}}, {"tan", {"std::tan", 1}},
+            {"trunc", {"std::trunc", 1}},
         };
         const auto function = functions.find(name);
         if (function == functions.end()) {
@@ -2476,7 +2509,8 @@ private:
 
     bool is_terminator(const std::string& text) const {
         return text == "end" || starts_word(text, "elif") || starts_word(text, "else") ||
-               starts_word(text, "catch") || starts_word(text, "except");
+               starts_word(text, "catch") || starts_word(text, "except") ||
+               starts_word(text, "finally");
     }
 
     void skip_ignored(std::size_t& index) const {
@@ -2498,7 +2532,8 @@ private:
                 throw ParseError(lines_[index].number, "unexpected branch without an 'if'");
             }
             if (starts_word(lines_[index].text, "catch") ||
-                starts_word(lines_[index].text, "except")) {
+            starts_word(lines_[index].text, "except") ||
+            starts_word(lines_[index].text, "finally")) {
                 throw ParseError(lines_[index].number,
                                  "unexpected error handler without a 'try'");
             }
@@ -2513,13 +2548,16 @@ private:
                 }
                 const auto previous_return_type = active_return_type_;
                 const auto previous_function_state = inside_function_;
+                const auto previous_finally_state = inside_finally_;
                 active_return_type_ = function.return_type;
                 inside_function_ = true;
+                inside_finally_ = false;
                 bool definitely_returns = false;
                 function.body = parse_block(index, function_symbols, math_imported,
                                             &definitely_returns);
                 active_return_type_ = previous_return_type;
                 inside_function_ = previous_function_state;
+                inside_finally_ = previous_finally_state;
                 if (index == lines_.size() || lines_[index].text != "end") {
                     const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
                     throw ParseError(error_line, "function '" + function.name + "' is missing 'end'");
@@ -2620,13 +2658,19 @@ private:
         ++index;
         const auto previous_return_type = active_return_type_;
         const auto previous_function_state = inside_function_;
+        const auto previous_finally_state = inside_finally_;
+        const auto previous_loop_depth = loop_depth_;
         active_return_type_ = function.return_type;
         inside_function_ = true;
+        inside_finally_ = false;
+        loop_depth_ = 0;
         bool definitely_returns = false;
         function.body = parse_block(index, function_symbols, math_imported,
                                     &definitely_returns);
         active_return_type_ = previous_return_type;
         inside_function_ = previous_function_state;
+        inside_finally_ = previous_finally_state;
+        loop_depth_ = previous_loop_depth;
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "nested function '" + function.name +
@@ -3070,17 +3114,36 @@ private:
             handlers.push_back({std::move(cpp_error_type), cpp_name,
                                 std::move(cpp_message_name), std::move(body)});
         }
-        if (handlers.empty()) {
+        std::optional<Block> finally_body;
+        if (index < lines_.size() && starts_word(lines_[index].text, "finally")) {
+            if (lines_[index].text != "finally:") {
+                throw ParseError(lines_[index].number, "expected 'finally:'");
+            }
+            ++index;
+            auto finally_symbols = symbols;
+            const auto previous_finally_state = inside_finally_;
+            const auto previous_loop_depth = loop_depth_;
+            inside_finally_ = true;
+            loop_depth_ = 0;
+            finally_body = parse_block(index, finally_symbols, math_imported);
+            inside_finally_ = previous_finally_state;
+            loop_depth_ = previous_loop_depth;
+        }
+        if (handlers.empty() && !finally_body) {
             throw ParseError(line.number,
-                             "try block must be followed by 'catch name:' or 'except ErrorType:'");
+                             "try block must be followed by an error handler or 'finally:'");
         }
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "try block is missing 'end'");
         }
         ++index;
-        if (definitely_returns) *definitely_returns = try_returns && all_handlers_return;
-        return Statement{TryCatchStatement{std::move(try_body), std::move(handlers)},
+        if (definitely_returns) {
+            *definitely_returns = try_returns &&
+                                  (handlers.empty() || all_handlers_return);
+        }
+        return Statement{TryCatchStatement{std::move(try_body), std::move(handlers),
+                                           std::move(finally_body)},
                          line.number};
     }
 
@@ -3301,6 +3364,9 @@ private:
 
     std::string parse_return(const SourceLine& line, Symbols& symbols, bool math_imported,
                              bool* returns) const {
+        if (inside_finally_) {
+            throw ParseError(line.number, "'return' is not allowed inside a 'finally' block");
+        }
         if (!inside_function_) throw ParseError(line.number, "'return' is only valid inside a function");
         const auto value_text = trim(line.text.substr(6));
         if (active_return_type_) {
@@ -3811,6 +3877,10 @@ private:
             return result;
         }
         if (text == "break" || text == "continue") {
+            if (inside_finally_ && loop_depth_ == 0) {
+                throw ParseError(line.number, "'" + text +
+                                                 "' cannot exit a 'finally' block");
+            }
             if (loop_depth_ == 0) {
                 throw ParseError(line.number, "'" + text +
                                                "' is only valid inside a loop");
@@ -3895,6 +3965,7 @@ private:
     std::vector<std::vector<std::string>> local_function_scopes_;
     std::optional<Type> active_return_type_;
     bool inside_function_ = false;
+    bool inside_finally_ = false;
     std::size_t next_loop_id_ = 0;
     std::size_t next_catch_id_ = 0;
     std::size_t next_local_function_id_ = 0;

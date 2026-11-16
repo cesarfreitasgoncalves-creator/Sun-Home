@@ -463,10 +463,12 @@ end
 Essas instrucoes geram erro se forem usadas fora de um loop.
 
 `import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
-funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
-`math.log`, `math.pow`, `math.sin`, `math.sqrt` e `math.tan`. Essas funcoes
-recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
-implementada usando `<cmath>` do C++.
+funcoes `math.abs`, `math.acos`, `math.asin`, `math.atan`, `math.atan2`,
+`math.ceil`, `math.cos`, `math.exp`, `math.floor`, `math.fmod`, `math.hypot`,
+`math.log`, `math.log10`, `math.log2`, `math.pow`, `math.sin`, `math.sqrt`,
+`math.tan` e `math.trunc`. Todas recebem um ou dois argumentos numericos; todas,
+exceto `math.atan2`, `math.fmod`, `math.hypot` e `math.pow`, recebem um. A
+biblioteca e implementada usando `<cmath>` do C++.
 
 ### Modulos locais
 
@@ -475,11 +477,34 @@ relativo sem extensao e um alias. O modulo local e separado da biblioteca
 padrao: `import math` continua escolhendo a stdlib, enquanto `import local/math`
 carrega `local/math.su`.
 
-```sun
-import local/math as (math_local)
+Use `export def` para declarar a API publica de um modulo. Quando um modulo
+usa pelo menos uma declaracao explicita de exportacao, somente as funcoes
+marcadas ficam disponiveis ao importador; as demais podem ser usadas como
+helpers internos. Para manter compatibilidade, modulos sem `export def`
+continuam exportando todas as funcoes de nivel superior:
 
-let result: number = math_local.sqrt(4)
-print(result)
+```sun
+import math
+
+export def distance(x: number, y: number): number
+    return math.sqrt(x * x + y * y)
+end
+
+def clamp(value: number): number
+    if value < 0:
+        return 0
+    end
+    return value
+end
+```
+
+O importador acessa `distance`, mas `clamp` permanece privado quando o modulo
+declara exports explicitamente:
+
+```sun
+import local/geometry as geometry
+
+print(geometry.distance(3, 4))
 ```
 
 O alias entre parenteses e opcional. Modulos locais podem importar outros
@@ -497,6 +522,9 @@ import sys
 
 print(sys.args())
 print(sys.platform())
+print(sys.cwd())
+print(sys.env("HOME", ""))
+print(sys.env_exists("HOME"))
 sys.exit(int(0))
 ```
 
@@ -504,6 +532,9 @@ sys.exit(int(0))
 excluindo o nome do executavel. `sys.platform()` retorna `windows`, `macos`,
 `linux`, `unix` ou `unknown`. `sys.exit(code)` encerra o processo com um codigo
 de saida que precisa caber no tipo `int` do sistema.
+`sys.cwd()` retorna o diretorio de trabalho atual. `sys.env(name, fallback)`
+retorna o valor de uma variavel de ambiente ou o texto alternativo informado;
+`sys.env_exists(name)` informa se ela esta definida.
 
 ### Structs, enums e classes simples
 
@@ -615,7 +646,13 @@ print(io.exists(path))
 
 `io.write_text(path, contents)` cria ou substitui o arquivo;
 `io.append_text(path, contents)` acrescenta ao final; `io.read_text(path)`
-retorna o conteudo completo como `string`; `io.exists(path)` retorna `bool`.
+retorna o conteudo completo como `string`; `io.exists(path)` verifica se o
+caminho existe. `io.read_lines(path)` devolve as linhas como `list[string]`;
+`io.is_directory(path)` verifica se o caminho e um diretorio;
+`io.create_directories(path)` cria a arvore de diretorios e retorna `true` se
+algo foi criado; `io.remove(path)` remove um arquivo ou diretorio vazio e
+retorna se removeu algo; `io.file_size(path)` retorna o tamanho em bytes como
+`int`.
 Erros ao abrir, ler ou gravar arquivos geram erros de runtime Sun e podem ser
 capturados com `try`/`catch`. A implementacao C++ isolada da biblioteca fica em
 `src/stdlib_io.cpp`, e o runtime necessario e incluido no C++ gerado.
@@ -747,6 +784,26 @@ C++ nao pertencem a essa hierarquia e nao sao capturados por `except AnError`.
 `AnError` deve ser o ultimo handler, pois funciona como wildcard para os erros
 Sun que ainda nao foram capturados por handlers anteriores. Os handlers
 tipados aceitam `AnError` ou qualquer classe derivada dela.
+
+Um bloco `finally:` opcional pode vir depois dos handlers, ou sozinho depois
+do corpo `try`. Ele executa ao sair do bloco, inclusive quando ocorre `return`
+ou uma excecao nao tratada:
+
+```sun
+try:
+    let contents: string = io.read_text("config.txt")
+except AnError as erro:
+    print(erro)
+finally:
+    print("Operacao finalizada")
+end
+```
+
+`finally` nao pode conter `return`, `break` ou `continue` que tentem escapar do
+bloco. Se ele lancar uma excecao durante a propagacao de outra excecao, a
+excecao original continua sendo propagada. Como em outras linguagens, ele nao
+executa se o processo for encerrado diretamente por `sys.exit`, `abort`, falha
+de memoria/segmentacao ou encerramento externo.
 
 Para blocos `inline cpp` executados dentro de um `try`, use `except cppCatcher`
 para capturar excecoes C++ lancadas pelo proprio bloco. `as nome` e opcional;

@@ -1,0 +1,70 @@
+{
+  "name": "sun-language",
+  "displayName": "Sun Language",
+  "description": "Language support and file icons for Sun (.su) files.",
+  "version": "0.2.0",
+  "publisher": "sun-language",
+  "main": "./extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/freitasgoncalvescesar1-boop/Sun-Home.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onLanguage:sun"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Themes"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "sun",
+        "aliases": [
+          "Sun",
+          "sun"
+        ],
+        "extensions": [
+          ".su"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sun",
+        "scopeName": "source.sun",
+        "path": "./syntaxes/sun.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "sun",
+        "path": "./snippets/sun.json"
+      }
+    ],
+    "configuration": {
+      "title": "Sun",
+      "properties": {
+        "sun.format.indentSize": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of spaces used by the Sun formatter."
+        }
+      }
+    },
+    "iconThemes": [
+      {
+        "id": "sun-file-icons",
+        "label": "Sun File Icons",
+        "path": "./icons/sun-icon-theme.json"
+      }
+    ]
+  }
+}

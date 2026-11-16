@@ -1,3 +1,4 @@
+import os
 import pathlib
 import shutil
 import subprocess
@@ -6,7 +7,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 COMPILER = ROOT / "build" / "sun"
-WORK = ROOT / "build" / "test-sun"
+WORK = pathlib.Path(os.environ.get("SUN_TEST_WORK", ROOT / "build" / "test-sun"))
 
 
 class SunCompilerTests(unittest.TestCase):
@@ -39,13 +40,256 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("Usage: sun <source.su>", result.stdout)
+        self.assertIn("--check", result.stdout)
+
+    def test_check_validates_without_creating_output(self):
+        result = self.invoke(
+            "check-only.su",
+            'let count: int = int(3)\nprint(count)\n',
+            "--check",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse((WORK / "check-only.cpp").exists())
+
+    def test_check_reports_errors_with_source_context(self):
+        result = self.invoke("check-error.su", 'print("ok")\nmissing()\n', "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("check-error.su:2:1", result.stderr)
+        self.assertIn("  2 | missing()", result.stderr)
+        self.assertIn("    | ^^^^^^^", result.stderr)
+        self.assertIn("= help: Check the spelling or declare the function", result.stderr)
+        self.assertFalse((WORK / "check-error.cpp").exists())
+
+    def test_old_func_keyword_explains_its_replacement(self):
+        result = self.invoke("old-function-keyword.su", "func greet()\nend\n", "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("keyword 'func' was renamed to 'def'", result.stderr)
+        self.assertIn("= help: Replace 'func' with 'def'", result.stderr)
+
+    def test_check_explains_unknown_values_at_their_column(self):
+        result = self.invoke("unknown-value.su", "print(missing)\n", "--check")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown-value.su:1:7", result.stderr)
+        self.assertIn("= help: Declare the value with 'let'", result.stderr)
+
+    def test_check_rejects_output_and_compilation_options(self):
+        ignored_output = WORK / "ignored.cpp"
+        for arguments in (("--compile",), ("-o", str(ignored_output)), ("--compiler", "g++")):
+            with self.subTest(arguments=arguments):
+                result = self.invoke("check-options.su", 'print("ok")\n',
+                                     "--check", *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--check", result.stderr)
+                self.assertFalse((WORK / "check-options.cpp").exists())
+                self.assertFalse(ignored_output.exists())
+
+    def test_trailing_comments_preserve_strings_and_inline_cpp(self):
+        result = self.invoke(
+            "trailing-comments.su",
+            "def show()\n"
+            '    print("Sun # language comment") # ignored after expression\n'
+            "    inline cpp:\n"
+            '        std::cout << "C++ comment follows" << \'\\n\'; // # remains C++ text\n'
+            "    endcpp\n"
+            "end\n"
+            "show()\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "trailing-comments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Sun # language comment\nC++ comment follows\n")
+
+    def test_typed_dictionaries_support_lookup_update_length_and_iteration(self):
+        result = self.invoke(
+            "dictionaries.su",
+            "let scores: dict[string, number] = {}\n"
+            'scores["Ada"] = 10\n'
+            'scores["Bo"] = 20\n'
+            'scores["Ada"] = 15\n'
+            'print(scores["Ada"])\n'
+            'print(scores.contains("Ada"))\n'
+            "print(len(scores))\n"
+            "print(scores)\n"
+            "for key in scores:\n"
+            "    print(key)\n"
+            "end\n"
+            "try:\n"
+            '    print(scores["missing"])\n'
+            "catch error:\n"
+            '    print(error)\n'
+            "end\n"
+            'let removed: bool = scores.remove("Bo")\n'
+            "print(removed)\n"
+            'print(scores.contains("Bo"))\n'
+            'scores.remove("missing")\n'
+            "print(len(scores))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "dictionaries")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "15\ntrue\n2\n{Ada: 15, Bo: 20}\nAda\nBo\n"
+            "dictionary key not found\ntrue\nfalse\n1\n",
+        )
+
+    def test_dictionary_keys_values_get_and_clear(self):
+        result = self.invoke(
+            "dictionary-operations.su",
+            'let ages: dict[string, int] = {"Ada": int(37), "Lin": int(31)}\n'
+            "print(ages.keys())\n"
+            "print(ages.values())\n"
+            'print(ages.get("Ada", int(0)))\n'
+            'print(ages.get("Grace", int(0)))\n'
+            "ages.clear()\n"
+            "print(len(ages))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "dictionary-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "[Ada, Lin]\n[37, 31]\n37\n0\n0\n")
+
+    def test_additional_list_operations(self):
+        result = self.invoke(
+            "list-operations.su",
+            "let values: list[int] = [int(1), int(2), int(2)]\n"
+            "print(values.contains(int(2)))\n"
+            "values.insert(int(1), int(9))\n"
+            "print(values)\n"
+            "let removed: bool = values.remove(int(2))\n"
+            "print(removed)\n"
+            "let popped: int = values.pop(int(1))\n"
+            "print(popped)\n"
+            "print(values)\n"
+            "print(values.remove(int(9)))\n"
+            "values.insert(int(2), int(3))\n"
+            "print(values)\n"
+            "values.clear()\n"
+            "print(len(values))\n"
+            "try:\n"
+            "    values.pop(int(0))\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "list-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\n[1, 9, 2, 2]\ntrue\n9\n[1, 2]\nfalse\n"
+            "[1, 2, 3]\n0\n"
+            "list pop index out of bounds or not a non-negative integer\n",
+        )
+
+    def test_tuples_are_typed_immutable_and_indexed_at_compile_time(self):
+        result = self.invoke(
+            "tuples.su",
+            "def swap(pair: tuple[int, string]): tuple[string, int]\n"
+            "    return (pair[1], pair[0])\n"
+            "end\n"
+            'let pair: tuple[int, string] = (int(42), "Ada")\n'
+            "let swapped: tuple[string, int] = swap(pair)\n"
+            "print(pair)\n"
+            "print(pair[0])\n"
+            "print(pair[1])\n"
+            "print(swapped)\n"
+            "let singleton: tuple[bool] = (true,)\n"
+            "print(singleton)\n"
+            'print(pair == (int(42), "Ada"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "tuples")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "(42, Ada)\n42\nAda\n(Ada, 42)\n(true,)\ntrue\n",
+        )
+
+        invalid_index = self.invoke(
+            "dynamic-tuple-index.su",
+            'let pair: tuple[int, string] = (int(42), "Ada")\n'
+            "let index: int = int(0)\n"
+            "print(pair[index])\n",
+            "--check",
+        )
+        self.assertNotEqual(invalid_index.returncode, 0)
+        self.assertIn("tuple index must be a non-negative integer literal",
+                      invalid_index.stderr)
+
+    def test_istype_recognizes_collection_categories(self):
+        result = self.invoke(
+            "collection-istype.su",
+            'print(istype((1, 2), tuple))\n'
+            'print(istype(("one", true), tuple))\n'
+            'print(istype(1, tuple))\n'
+            'print(istype([1, 2], list))\n'
+            'print(istype([], list))\n'
+            'print(istype(1, list))\n'
+            'print(istype({"one": 1}, dict))\n'
+            'print(istype({}, dict))\n'
+            'print(istype((1, 2), dict))\n'
+            'print(istype(1, dict))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "collection-istype")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\n",
+        )
 
     def test_transpiles_and_compiles_function_calls_and_strings(self):
         result = self.invoke(
             "greeting.su",
             'greet("Sun")\n'
             '\n'
-            'func greet(name)\n'
+            'def greet(name)\n'
             '    print("Hello, " + name + "!\\n")\n'
             'end\n',
             "--compile",
@@ -66,11 +310,287 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "Hello, Sun!\n\n")
 
+    def test_named_arguments_work_for_functions_methods_and_constructors(self):
+        result = self.invoke(
+            "named-arguments.su",
+            "def describe(name: string, age: int = int(0)): string\n"
+            '    return f"{name}:{age}"\n'
+            "end\n"
+            "class Counter\n"
+            "    value: int\n"
+            "    def init(start: int)\n"
+            "        self.value = start\n"
+            "    end\n"
+            "    def add(amount: int)\n"
+            "        self.value = self.value + amount\n"
+            "    end\n"
+            "    def current(): int\n"
+            "        return self.value\n"
+            "    end\n"
+            "    def plus(amount: int): int\n"
+            "        return self.value + amount\n"
+            "    end\n"
+            "end\n"
+            "struct Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "end\n"
+            'print(describe(age=int(21), name="Ada"))\n'
+            'print(describe("Lin"))\n'
+            "let counter: Counter = Counter(start=int(3))\n"
+            "counter.add(amount=int(4))\n"
+            "print(counter.current())\n"
+            "print(counter.plus(amount=int(2)))\n"
+            "let point: Point = Point(y=int(8), x=int(5))\n"
+            "print(point.x + point.y)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "named-arguments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Ada:21\nLin:0\n7\n9\n13\n")
+
+    def test_named_argument_validation(self):
+        cases = [
+            (
+                "unknown-named-argument",
+                "def greet(name: string)\n"
+                "    print(name)\n"
+                "end\n"
+                'greet(user="Ada")\n',
+                "unknown named argument 'user'",
+            ),
+            (
+                "duplicate-named-argument",
+                "def greet(name: string)\n"
+                "    print(name)\n"
+                "end\n"
+                'greet("Ada", name="Lin")\n',
+                "multiple values for parameter 'name'",
+            ),
+            (
+                "positional-after-named",
+                "def combine(first: int, second: int)\n"
+                "    print(first + second)\n"
+                "end\n"
+                "combine(first=int(1), int(2))\n",
+                "positional arguments cannot follow named arguments",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_variadic_parameters_accept_typed_collection_unpacking(self):
+        result = self.invoke(
+            "variadic-unpacking.su",
+            "def collect(prefix: int, *values: int)\n"
+            "    print(prefix)\n"
+            "    print(values)\n"
+            "end\n"
+            "def options(**values: string)\n"
+            "    print(values)\n"
+            "end\n"
+            "let numbers: list[int] = [int(2), int(3)]\n"
+            'let settings: dict[string, string] = {"mode": "fast", "label": "ok"}\n'
+            "collect(int(1), *numbers)\n"
+            "options(**settings)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "variadic-unpacking")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "1\n[2, 3]\n{label: ok, mode: fast}\n")
+
+    def test_variadic_unpacking_rejects_mismatched_collections_and_signatures(self):
+        cases = [
+            (
+                "wrong-positional-item-type",
+                "def collect(*values: int)\nend\n"
+                'let words: list[string] = ["one"]\n'
+                "collect(*words)\n",
+                "unpacked list item type must be int",
+            ),
+            (
+                "keyword-unpack-with-regular-parameters",
+                "def collect(required: int, **values: string)\nend\n"
+                'let options: dict[string, string] = {"mode": "fast"}\n'
+                "collect(**options)\n",
+                "**kwargs unpacking requires a function with only **kwargs",
+            ),
+            (
+                "keyword-unpack-wrong-value-type",
+                "def collect(**values: string)\nend\n"
+                'let options: dict[string, int] = {"count": int(3)}\n'
+                "collect(**options)\n",
+                "**kwargs requires dict[string, string]",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_nested_function_parameters_accept_constant_defaults(self):
+        result = self.invoke(
+            "nested-defaults.su",
+            "def outer(base: int): int\n"
+            "    def add(value: int = int(4)): int\n"
+            "        return base + value\n"
+            "    end\n"
+            "    print(add())\n"
+            "    return add(value=int(3))\n"
+            "end\n"
+            "print(outer(int(2)))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "nested-defaults")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "6\n5\n")
+
+    def test_typed_variadic_arguments_collect_positional_and_named_values(self):
+        result = self.invoke(
+            "variadic-arguments.su",
+            "def inspect(*values: int, **options: string)\n"
+            "    print(values)\n"
+            "    print(options)\n"
+            "end\n"
+            'inspect(int(2), int(3), label="items", mode="fast")\n'
+            "def local_test(): int\n"
+            "    def total(*values: int): int\n"
+            "        let result: int = int(0)\n"
+            "        for value in values:\n"
+            "            result = result + value\n"
+            "        end\n"
+            "        return result\n"
+            "    end\n"
+            "    return total(int(4), int(5), int(6))\n"
+            "end\n"
+            "print(local_test())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "variadic-arguments")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "[2, 3]\n{label: items, mode: fast}\n15\n",
+        )
+
+    def test_variadic_parameters_require_valid_types_and_order(self):
+        cases = [
+            ("missing-variadic-type", "def collect(*values)\nend\n",
+             "variadic parameters require an explicit scalar type"),
+            ("regular-after-variadic",
+             "def collect(*values: int, other: int)\nend\n",
+             "variadic parameters must follow all regular parameters"),
+            ("duplicate-variadic",
+             "def collect(*values: int, *others: int)\nend\n",
+             "a function may declare only one *args parameter"),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_string_operations_cover_transform_search_replace_and_split(self):
+        result = self.invoke(
+            "string-operations.su",
+            'let text: string = "  Sun language  "\n'
+            'let clean: string = text.trim()\n'
+            'print("Hello".upper())\n'
+            'print(clean.upper())\n'
+            'print(clean.lower())\n'
+            'print(clean.replace("Sun", "Moon"))\n'
+            'print(clean.split(" "))\n'
+            'print(clean.contains("language"))\n'
+            'print(clean.starts_with("Sun"))\n'
+            'print(clean.ends_with("language"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "string-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "HELLO\nSUN LANGUAGE\nsun language\nMoon language\n[Sun, language]\n"
+            "true\ntrue\ntrue\n",
+        )
+
+    def test_string_split_and_replace_reject_empty_search_values_at_runtime(self):
+        for operation, expression, expected_error in [
+            ("split", '"a".split("")', "string.split separator cannot be empty"),
+            ("replace", '"a".replace("", "b")',
+             "string.replace search text cannot be empty"),
+        ]:
+            with self.subTest(operation=operation):
+                result = self.invoke(
+                    f"string-{operation}-empty.su",
+                    "try:\n"
+                    f"    print({expression})\n"
+                    "except AnError as error:\n"
+                    "    print(error)\n"
+                    "end\n",
+                    "--compile",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                executable = subprocess.run(
+                    [str(WORK / f"string-{operation}-empty")],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(executable.returncode, 0, executable.stderr)
+                self.assertEqual(executable.stdout, expected_error + "\n")
+
     def test_f_strings_interpolate_parameters_and_escape_braces(self):
         result = self.invoke(
             "f-string.su",
-            'func greet(name)\n'
+            "def double(value: number): number\n"
+            "    return value * 2\n"
+            "end\n"
+            'def greet(name)\n'
+            "    let count: int = int(3)\n"
+            "    let items: list[int] = [int(7)]\n"
             '    print(f"Hello, {name}! {{welcome}}" + " again")\n'
+            '    print(f"count={count + int(1)}, double={double(2.5)}, item={items[0]}")\n'
+            '    print(f"brace={char(\\"}\\")}")\n'
             'end\n'
             'greet("Sun")\n',
             "--compile",
@@ -84,12 +604,24 @@ class SunCompilerTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
-        self.assertEqual(executable.stdout, "Hello, Sun! {welcome} again\n")
+        self.assertEqual(
+            executable.stdout,
+            "Hello, Sun! {welcome} again\ncount=4, double=5, item=7\nbrace=}\n",
+        )
+
+    def test_f_string_reports_errors_in_embedded_expressions(self):
+        result = self.invoke(
+            "f-string-expression-error.su",
+            'print(f"value={missing + 1}")\n',
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown value 'missing'", result.stderr)
 
     def test_formatted_print_substitutes_values_and_escaped_percent(self):
         result = self.invoke(
             "formatted-print.su",
-            'func greet(name)\n'
+            'def greet(name)\n'
             '    print("Seu nome é %v (100%% Sun).", %v=name)\n'
             '    print("%v and %v.", %v=name, %v="Sun")\n'
             'end\n'
@@ -118,13 +650,13 @@ class SunCompilerTests(unittest.TestCase):
     def test_empty_print_has_a_source_error(self):
         result = self.invoke("empty-print.su", "print()\n")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 1: error: expected print(expression)", result.stderr)
+        self.assertIn("error: expected print(expression)", result.stderr)
 
     def test_numeric_operators_math_and_if_elif_else(self):
         result = self.invoke(
             "math-branches.su",
             "import math\n"
-            "func classify(x: number)\n"
+            "def classify(x: number)\n"
             "    let magnitude: number = math.sqrt(math.pow(x, 2))\n"
             "    let score: number = magnitude + 2 * 3\n"
             "    if score < 7:\n"
@@ -151,10 +683,444 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "seven\nlarge 8\nsmall\n")
 
+    def test_math_additional_trigonometric_logarithmic_and_numeric_functions(self):
+        result = self.invoke(
+            "math-additions.su",
+            "import math\n"
+            "print(math.acos(1))\n"
+            "print(math.asin(0))\n"
+            "print(math.atan(0))\n"
+            "print(math.atan2(0, 1))\n"
+            "print(math.fmod(7, 4))\n"
+            "print(math.hypot(3, 4))\n"
+            "print(math.log10(100))\n"
+            "print(math.log2(8))\n"
+            "print(math.trunc(2.9))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "math-additions")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "0\n0\n0\n0\n3\n5\n2\n3\n2\n")
+
+    def test_constant_expressions_are_folded_in_generated_cpp(self):
+        result = self.invoke(
+            "constant-folding.su",
+            "import math\n"
+            "print(int(2) + int(3) * int(4))\n"
+            "print(7 < 9)\n"
+            "print(math.sqrt(81))\n"
+            "print(1.0 / 3.0)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = (WORK / "constant-folding.cpp").read_text(encoding="utf-8")
+        self.assertIn("sun_to_string(std::int64_t{14})", generated)
+        self.assertIn("sun_to_string(true)", generated)
+        self.assertIn("sun_to_string(9.0)", generated)
+        main_body = generated.split("int main()", 1)[1]
+        self.assertNotIn("sun_int_mul", main_body)
+        executable = subprocess.run(
+            [str(WORK / "constant-folding")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "14\ntrue\n9\n0.333333\n")
+
+    def test_const_values_are_immutable_and_folded(self):
+        result = self.invoke(
+            "const-values.su",
+            "const base: int = int(20)\n"
+            "const answer: int = base + int(22)\n"
+            'const greeting: string = "Sun"\n'
+            'const symbol: char = char("☀")\n'
+            "print(answer)\n"
+            "print(greeting)\n"
+            "print(symbol)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = (WORK / "const-values.cpp").read_text(encoding="utf-8")
+        main_body = generated.split("int main()", 1)[1]
+        self.assertIn("sun_to_string(std::int64_t{42})", main_body)
+        executable = subprocess.run(
+            [str(WORK / "const-values")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "42\nSun\n☀\n")
+
+    def test_const_rejects_mutation_and_nonconstant_initializers(self):
+        reassignment = self.invoke(
+            "const-reassignment.su",
+            "const limit: int = int(4)\n"
+            "limit = int(5)\n",
+            "--check",
+        )
+        self.assertNotEqual(reassignment.returncode, 0)
+        self.assertIn("cannot assign to constant 'limit'", reassignment.stderr)
+
+        nonconstant = self.invoke(
+            "const-variable.su",
+            "let value: int = int(2)\n"
+            "const result: int = value\n",
+            "--check",
+        )
+        self.assertNotEqual(nonconstant.returncode, 0)
+        self.assertIn("constant initializer must be a compile-time constant expression",
+                      nonconstant.stderr)
+
+        failing = self.invoke(
+            "const-division-by-zero.su",
+            "const value: int = int(1) / int(0)\n",
+            "--check",
+        )
+        self.assertNotEqual(failing.returncode, 0)
+        self.assertIn("constant initializer must be a compile-time constant expression",
+                      failing.stderr)
+
+    def test_anerror_subclasses_can_be_raised_and_caught(self):
+        result = self.invoke(
+            "custom-errors.su",
+            "class InputError(AnError)\n"
+            "    code: int\n"
+            "    def init(message: string, code: int)\n"
+            "        self.code = code\n"
+            "    end\n"
+            "    def get_code(): int\n"
+            "        return self.code\n"
+            "    end\n"
+            "end\n"
+            'let error: InputError = InputError("invalid input", int(9))\n'
+            "print(error.get_code())\n"
+            "try:\n"
+            "    raise error\n"
+            "catch message:\n"
+            "    print(message)\n"
+            "end\n"
+            "try:\n"
+            '    raise AnError("base error")\n'
+            "catch message:\n"
+            "    print(message)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "custom-errors")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "9\ninvalid input\nbase error\n")
+
+    def test_raise_rejects_non_errors_and_unsupported_inheritance(self):
+        not_error = self.invoke(
+            "raise-non-error.su",
+            "class Point\n"
+            "    x: int\n"
+            "end\n"
+            "raise Point(int(1))\n",
+            "--check",
+        )
+        self.assertNotEqual(not_error.returncode, 0)
+        self.assertIn("raise requires an AnError or a subclass", not_error.stderr)
+
+        unsupported_base = self.invoke(
+            "unsupported-base.su",
+            "class Parent\n"
+            "end\n"
+            "class Child(Parent)\n"
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(unsupported_base.returncode, 0)
+        self.assertIn("class inheritance currently supports only '(AnError)'",
+                      unsupported_base.stderr)
+
+    def test_except_handlers_are_ordered_and_anerror_is_a_wildcard(self):
+        result = self.invoke(
+            "except-wildcard.su",
+            "class ValidationError(AnError)\n"
+            "end\n"
+            "try:\n"
+            '    raise ValidationError("invalid input")\n'
+            "except ValidationError as message:\n"
+            '    print("specific: " + message)\n'
+            "except AnError as message:\n"
+            '    print("wildcard: " + message)\n'
+            "end\n"
+            "try:\n"
+            "    let value: int = int(1) / int(0)\n"
+            "except AnError as message:\n"
+            '    print("wildcard: " + message)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-wildcard")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "specific: invalid input\nwildcard: int division by zero\n",
+        )
+
+    def test_except_anerror_must_follow_specific_handlers(self):
+        result = self.invoke(
+            "except-after-wildcard.su",
+            "class ValidationError(AnError)\n"
+            "end\n"
+            "try:\n"
+            '    raise ValidationError("invalid")\n'
+            "except AnError:\n"
+            '    print("caught")\n'
+            "except ValidationError:\n"
+            '    print("unreachable")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no handler may follow the 'except AnError' wildcard",
+                      result.stderr)
+
+    def test_except_anerror_does_not_catch_arbitrary_cpp_exceptions(self):
+        result = self.invoke(
+            "except-native-exception.su",
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw std::runtime_error("native failure");\n'
+            "    endcpp\n"
+            "except AnError:\n"
+            '    print("caught")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-native-exception")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(executable.returncode, 0)
+        self.assertEqual(executable.stdout, "")
+        self.assertIn("native failure", executable.stderr)
+
+    def test_except_cppcatcher_catches_inline_cpp_exceptions_only(self):
+        result = self.invoke(
+            "except-cpp-catcher.su",
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw std::runtime_error("native failure");\n'
+            "    endcpp\n"
+            "except cppCatcher as error:\n"
+            '    print("caught: " + error)\n'
+            "except AnError:\n"
+            '    print("Sun error")\n'
+            "end\n"
+            "try:\n"
+            "    inline cpp:\n"
+            "        throw 42;\n"
+            "    endcpp\n"
+            "except cppCatcher as error:\n"
+            '    print("caught: " + error)\n'
+            "end\n"
+            "try:\n"
+            "    let value: int = int(1) / int(0)\n"
+            "except AnError as error:\n"
+            '    print("Sun: " + error)\n'
+            "end\n"
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw SunRuntimeError("Sun error from inline");\n'
+            "    endcpp\n"
+            "except cppCatcher:\n"
+            '    print("native error")\n'
+            "except AnError as error:\n"
+            '    print("Sun: " + error)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-cpp-catcher")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "caught: native failure\n"
+            "caught: unknown C++ exception in inline cpp\n"
+            "Sun: int division by zero\n"
+            "Sun: Sun error from inline\n",
+        )
+
+    def test_finally_runs_after_normal_handled_and_return_paths(self):
+        result = self.invoke(
+            "finally.su",
+            "def return_value(): int\n"
+            "    try:\n"
+            "        return int(7)\n"
+            "    finally:\n"
+            '        print("return cleanup")\n'
+            "    end\n"
+            "end\n"
+            "print(return_value())\n"
+            "try:\n"
+            '    raise AnError("handled")\n'
+            "except AnError:\n"
+            '    print("caught")\n'
+            "finally:\n"
+            '    print("exception cleanup")\n'
+            "end\n"
+            "try:\n"
+            '    print("body")\n'
+            "finally:\n"
+            '    print("normal cleanup")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "finally")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "return cleanup\n7\ncaught\nexception cleanup\nbody\nnormal cleanup\n",
+        )
+
+    def test_finally_runs_before_unhandled_error_reaches_main(self):
+        result = self.invoke(
+            "finally-unhandled.su",
+            "try:\n"
+            '    raise AnError("unhandled")\n'
+            "finally:\n"
+            '    print("cleanup")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "finally-unhandled")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 1)
+        self.assertEqual(executable.stdout, "cleanup\n")
+        self.assertIn("unhandled", executable.stderr)
+
+    def test_finally_rejects_control_flow_that_would_escape_its_cleanup(self):
+        result = self.invoke(
+            "finally-return.su",
+            "def value(): int\n"
+            "    try:\n"
+            "        return int(1)\n"
+            "    finally:\n"
+            "        return int(2)\n"
+            "    end\n"
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("'return' is not allowed inside a 'finally' block",
+                      result.stderr)
+
+    def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
+        result = self.invoke(
+            "assertion.su",
+            "assert(1 < 2)\n"
+            "try:\n"
+            "    assert(false)\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "assertion")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "assertion failed\n")
+
+        invalid = self.invoke("assertion-type.su", "assert(1)\n", "--check")
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("assert condition must be bool", invalid.stderr)
+
+    def test_constant_folding_preserves_runtime_integer_errors(self):
+        cases = [
+            ("int(9223372036854774784.0) + int(1024)", "int arithmetic overflow"),
+            ("int(-9223372036854775808.0) - int(1)", "int arithmetic overflow"),
+            ("int(3037000500) * int(3037000500)", "int arithmetic overflow"),
+            ("-int(-9223372036854775808.0)", "int arithmetic overflow"),
+            ("int(-9223372036854775808.0) / int(-1)", "int arithmetic overflow"),
+            ("int(8) / int(0)", "int division by zero"),
+            ("int(8) % int(0)", "int modulo by zero"),
+            ("int(9223372036854775808.0)", "int() requires an in-range whole number"),
+            ("int(1.5)", "int() requires an in-range whole number"),
+        ]
+        source = "".join(
+            "try:\n"
+            f"    print({expression})\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            for expression, _ in cases
+        )
+        result = self.invoke("constant-integer-errors.su", source, "--compile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "constant-integer-errors")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "".join(f"{message}\n" for _, message in cases),
+        )
+
     def test_numeric_precedence_fractional_division_and_nested_conditions(self):
         result = self.invoke(
             "operators.su",
-            "func check()\n"
+            "def check()\n"
             "    let value: number = -9 / 2 + 3 % 2 - 0\n"
             "    if value <= -3:\n"
             "        if value >= -3.5:\n"
@@ -188,7 +1154,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_boolean_parameters_conditions_and_interpolation(self):
         result = self.invoke(
             "booleans.su",
-            "func show(enabled: bool)\n"
+            "def show(enabled: bool)\n"
             "    if enabled:\n"
             '        print(f"enabled={enabled}")\n'
             "    else:\n"
@@ -217,7 +1183,7 @@ class SunCompilerTests(unittest.TestCase):
             "#include <cstdio>\n"
             "static int sun_global_value = 40;\n"
             "endcpp\n"
-            "func show(value: number)\n"
+            "def show(value: number)\n"
             "    let next: number = value + 2\n"
             "    if next == 42:\n"
             "        inline cpp:\n"
@@ -247,24 +1213,24 @@ class SunCompilerTests(unittest.TestCase):
     def test_logical_operators_short_circuit_loops_assignments_and_returns(self):
         result = self.invoke(
             "control-flow.su",
-            "func add(a: number, b: number): number\n"
+            "def add(a: number, b: number): number\n"
             "    let result: number = a + b\n"
             "    return result\n"
             "end\n"
-            "func label(): string\n"
+            "def label(): string\n"
             '    return "total"\n'
             "end\n"
-            "func side_effect(): bool\n"
+            "def side_effect(): bool\n"
             '    print("called")\n'
             "    return true\n"
             "end\n"
-            "func short_circuit(value: bool): bool\n"
+            "def short_circuit(value: bool): bool\n"
             "    return value and side_effect()\n"
             "end\n"
-            "func short_or(value: bool): bool\n"
+            "def short_or(value: bool): bool\n"
             "    return value or side_effect()\n"
             "end\n"
-            "func calculate(): number\n"
+            "def calculate(): number\n"
             "    let count: number = 0\n"
             "    while count < 3:\n"
             "        count = count + 1\n"
@@ -306,7 +1272,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_non_void_function_requires_return_on_all_paths(self):
         result = self.invoke(
             "missing-return.su",
-            "func incomplete(enabled: bool): number\n"
+            "def incomplete(enabled: bool): number\n"
             "    if enabled:\n"
             "        return 1\n"
             "    end\n"
@@ -318,7 +1284,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_assignment_type_mismatch_and_void_value_use(self):
         assignment = self.invoke(
             "bad-assignment.su",
-            'func invalid()\n'
+            'def invalid()\n'
             '    let value: number = 1\n'
             '    value = "text"\n'
             "end\n",
@@ -328,9 +1294,9 @@ class SunCompilerTests(unittest.TestCase):
 
         void_value = self.invoke(
             "void-value.su",
-            "func act()\n"
+            "def act()\n"
             "end\n"
-            "func invalid(): number\n"
+            "def invalid(): number\n"
             "    return act()\n"
             "end\n",
         )
@@ -340,7 +1306,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_range_rejects_zero_step_at_runtime(self):
         result = self.invoke(
             "zero-range.su",
-            "func start()\n"
+            "def start()\n"
             "    for i in range(0, 3, 0):\n"
             '        print("unreachable")\n'
             "    end\n"
@@ -362,7 +1328,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_break_continue_and_istype(self):
         result = self.invoke(
             "break-continue-istype.su",
-            "func total(limit: number): number\n"
+            "def total(limit: number): number\n"
             "    let result: number = 0\n"
             "    for i in range(0, limit):\n"
             "        if i == 1:\n"
@@ -400,7 +1366,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_function_parameters_accept_trailing_default_values(self):
         result = self.invoke(
             "default-parameters.su",
-            "func describe(name: string = \"world\", times: number = 2): string\n"
+            "def describe(name: string = \"world\", times: number = 2): string\n"
             '    return f"Hello {name} {times}"\n'
             "end\n"
             'print(describe())\n'
@@ -425,7 +1391,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_parameters_work_in_statement_calls(self):
         result = self.invoke(
             "default-call.su",
-            'func greet(name: string = "world")\n'
+            'def greet(name: string = "world")\n'
             '    print(f"Hello {name}")\n'
             "end\n"
             "greet()\n",
@@ -445,7 +1411,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_values_must_be_typed_constant_expressions(self):
         wrong_type = self.invoke(
             "default-wrong-type.su",
-            'func invalid(value: number = "text")\n'
+            'def invalid(value: number = "text")\n'
             "end\n",
         )
         self.assertNotEqual(wrong_type.returncode, 0)
@@ -454,7 +1420,7 @@ class SunCompilerTests(unittest.TestCase):
 
         non_constant = self.invoke(
             "default-variable.su",
-            "func invalid(value: number = other)\n"
+            "def invalid(value: number = other)\n"
             "end\n",
         )
         self.assertNotEqual(non_constant.returncode, 0)
@@ -463,7 +1429,7 @@ class SunCompilerTests(unittest.TestCase):
     def test_default_parameters_must_be_trailing_and_break_must_be_in_loop(self):
         invalid_defaults = self.invoke(
             "default-order.su",
-            "func invalid(first: number = 1, second: number)\n"
+            "def invalid(first: number = 1, second: number)\n"
             "end\n",
         )
         self.assertNotEqual(invalid_defaults.returncode, 0)
@@ -471,7 +1437,7 @@ class SunCompilerTests(unittest.TestCase):
 
         invalid_break = self.invoke(
             "break-outside-loop.su",
-            "func invalid()\n"
+            "def invalid()\n"
             "    break\n"
             "end\n",
         )
@@ -481,18 +1447,97 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_math_calls_without_import(self):
         result = self.invoke(
             "missing-math-import.su",
-            "func root(x: number)\n"
+            "def root(x: number)\n"
             "    let value: number = sqrt(x)\n"
             "end\n",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("math functions require 'import math'", result.stderr)
 
+    def test_numeric_and_boolean_collection_builtins(self):
+        result = self.invoke(
+            "builtins.su",
+            "let integers: list[int] = [int(-4), int(7), int(2)]\n"
+            "let numbers: list[number] = [1.5, 2.5]\n"
+            "let flags: list[bool] = [true, false]\n"
+            "let no_flags: list[bool] = []\n"
+            "let no_integers: list[int] = []\n"
+            "print(sum(integers))\n"
+            "print(sum(numbers))\n"
+            "print(sum(no_integers))\n"
+            "print(sum([int(1), int(2)]))\n"
+            "print(all(flags))\n"
+            "print(all(no_flags))\n"
+            "print(all([true, true]))\n"
+            "print(any(flags))\n"
+            "print(any(no_flags))\n"
+            "print(any([false, true]))\n"
+            "print(min(int(-3), 2))\n"
+            "print(max(int(4), 4.5))\n"
+            "print(round(2.5))\n"
+            "print(round(-2.5))\n"
+            "print(min(0 / 0, 1))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "builtins")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "5\n4\n0\n3\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\n-3\n4.5\n3\n-3\nnan\n",
+        )
+
+    def test_float_builtins_and_decimal_rounding(self):
+        result = self.invoke(
+            "float-operations.su",
+            "print(abs(-2.75))\n"
+            "print(floor(2.75))\n"
+            "print(ceil(-2.75))\n"
+            "print(trunc(-2.75))\n"
+            "print(round(3.14159, int(2)))\n"
+            "print(round(149, int(-1)))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "float-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "2.75\n2\n-2\n-2\n3.14\n150\n")
+
+    def test_round_precision_requires_an_integer(self):
+        result = self.invoke(
+            "round-invalid-precision.su",
+            "print(round(3.14159, 2.0))\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("round() precision must have type int", result.stderr)
+
+    def test_builtins_reject_incompatible_collection_types(self):
+        result = self.invoke(
+            "builtin-type-error.su",
+            'let words: list[string] = ["hello"]\nprint(sum(words))\n',
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sum() requires a list[int] or list[number]", result.stderr)
+
     def test_memory_regions_are_bounded_shared_and_typed(self):
         result = self.invoke(
             "memory.su",
             "import memory\n"
-            "func store(buffer: region)\n"
+            "def store(buffer: region)\n"
             "    memory.write_u8(buffer, 1, 66)\n"
             "end\n"
             "let buffer: region = memory.alloc(4)\n"
@@ -542,6 +1587,38 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "true\nfalse\nHello Sun\n")
         self.assertEqual(target.read_text(encoding="utf-8"), "Hello Sun")
+
+    def test_io_lines_directories_file_size_and_remove(self):
+        directory = WORK / "io-extra-dir"
+        file_path = directory / "lines.txt"
+        result = self.invoke(
+            "io-extra.su",
+            "import io\n"
+            f'let directory: string = "{directory}"\n'
+            f'let path: string = "{file_path}"\n'
+            "print(io.create_directories(directory))\n"
+            'io.write_text(path, "first\\nsecond\\n")\n'
+            "print(io.is_directory(directory))\n"
+            "print(io.file_size(path))\n"
+            "print(io.read_lines(path))\n"
+            "print(io.remove(path))\n"
+            "print(io.exists(path))\n"
+            "print(io.remove(directory))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-extra")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "true\ntrue\n13\n[first, second]\ntrue\nfalse\ntrue\n",
+        )
 
     def test_io_requires_import_and_reports_read_errors(self):
         missing_import = self.invoke(
@@ -629,14 +1706,14 @@ class SunCompilerTests(unittest.TestCase):
     def test_typed_lists_indexing_append_iteration_and_empty_initialization(self):
         result = self.invoke(
             "lists.su",
-            "func total(values: list[int]): int\n"
+            "def total(values: list[int]): int\n"
             "    let result: int = int(0)\n"
             "    for value in values:\n"
             "        result = result + value\n"
             "    end\n"
             "    return result\n"
             "end\n"
-            "func identity(values: list[int]): list[int]\n"
+            "def identity(values: list[int]): list[int]\n"
             "    return values\n"
             "end\n"
             "let values: list[int] = []\n"
@@ -741,8 +1818,11 @@ class SunCompilerTests(unittest.TestCase):
 
     def test_local_module_alias_and_standard_library_precedence(self):
         (WORK / "math.su").write_text(
-            "func sqrt(value: number): number\n"
-            "    return value + 1\n"
+            "def sqrt(value: number): number\n"
+            "    def increment(value: number): number\n"
+            "        return value + 1\n"
+            "    end\n"
+            "    return increment(value)\n"
             "end\n",
             encoding="utf-8",
         )
@@ -766,10 +1846,60 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "9 5\n")
 
+    def test_local_modules_can_mark_public_exports_and_use_private_helpers(self):
+        (WORK / "public_tools.su").write_text(
+            "export def public_value(): int\n"
+            "    return private_helper()\n"
+            "end\n"
+            "def private_helper(): int\n"
+            "    return int(42)\n"
+            "end\n"
+            "def hidden_value(): int\n"
+            "    return int(99)\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "explicit-module-exports.su",
+            "import local/public_tools as tools\n"
+            "print(tools.public_value())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "explicit-module-exports")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "42\n")
+
+    def test_local_modules_reject_importing_unexported_functions(self):
+        (WORK / "private_tools.su").write_text(
+            "export def visible(): int\n"
+            "    return int(1)\n"
+            "end\n"
+            "def hidden(): int\n"
+            "    return int(2)\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "private-module-export.su",
+            "import local/private_tools as tools\n"
+            "print(tools.hidden())\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("module alias 'tools' does not export function 'hidden'",
+                      result.stderr)
+
     def test_local_modules_can_import_stdlib_io(self):
         (WORK / "file_tools.su").write_text(
             "import io\n"
-            "func exists(path: string): bool\n"
+            "def exists(path: string): bool\n"
             "    return io.exists(path)\n"
             "end\n",
             encoding="utf-8",
@@ -791,6 +1921,84 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "false\n")
 
+    def test_sys_standard_module_exposes_platform_args_and_exit(self):
+        result = self.invoke(
+            "sys-module.su",
+            "import sys\n"
+            "print(sys.args())\n"
+            "print(sys.platform())\n"
+            "sys.exit(int(7))\n"
+            'print("unreachable")\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "sys-module"), "first", "two words"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 7, executable.stderr)
+        self.assertEqual(executable.stdout.splitlines()[0], "[first, two words]")
+        self.assertIn(
+            executable.stdout.splitlines()[1],
+            {"linux", "windows", "macos", "unix", "unknown"},
+        )
+        self.assertNotIn("unreachable", executable.stdout)
+
+    def test_sys_exposes_cwd_and_environment_helpers(self):
+        result = self.invoke(
+            "sys-environment.su",
+            "import sys\n"
+            "print(sys.cwd())\n"
+            'print(sys.env_exists("SUN_TEST_VALUE"))\n'
+            'print(sys.env("SUN_TEST_VALUE", "fallback"))\n'
+            'print(sys.env("SUN_MISSING_VALUE", "fallback"))\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        environment = os.environ.copy()
+        environment["SUN_TEST_VALUE"] = "present"
+        executable = subprocess.run(
+            [str(WORK / "sys-environment")],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            f"{ROOT}\ntrue\npresent\nfallback\n",
+        )
+
+    def test_local_modules_can_import_sys_stdlib(self):
+        (WORK / "cli_tools.su").write_text(
+            "import sys\n"
+            "def arguments(): list[string]\n"
+            "    return sys.args()\n"
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "sys-local-module.su",
+            "import local/cli_tools as cli\n"
+            "print(cli.arguments())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "sys-local-module"), "payload"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "[payload]\n")
+
     def test_structs_enums_and_simple_classes(self):
         result = self.invoke(
             "custom-types.su",
@@ -804,13 +2012,13 @@ class SunCompilerTests(unittest.TestCase):
             "end\n"
             "class Counter\n"
             "    value: int\n"
-            "    func init(start: int)\n"
+            "    def init(start: int)\n"
             "        self.value = start\n"
             "    end\n"
-            "    func increment()\n"
+            "    def increment()\n"
             "        self.value = self.value + int(1)\n"
             "    end\n"
-            "    func get(): int\n"
+            "    def get(): int\n"
             "        return self.value\n"
             "    end\n"
             "end\n"
@@ -842,6 +2050,185 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown value 'Green' in enum 'Color'", result.stderr)
+
+    def test_payload_enums_and_match(self):
+        result = self.invoke(
+            "enum-match.su",
+            "enum Result\n"
+            "    Ok(value: number)\n"
+            "    Error(message: string)\n"
+            "    Pending\n"
+            "end\n"
+            "let result: Result = Result.Ok(42)\n"
+            "print(result)\n"
+            "match result:\n"
+            "    case Result.Ok(value):\n"
+            "        value = value + 1\n"
+            "        print(value)\n"
+            "    case Result.Error(message):\n"
+            "        print(message)\n"
+            "    else:\n"
+            '        print("pending")\n'
+            "end\n"
+            "let status: number = 2\n"
+            "match status:\n"
+            "    case 1:\n"
+            '        print("one")\n'
+            "    case 2:\n"
+            '        print("two")\n'
+            "    else:\n"
+            '        print("other")\n'
+            "end\n"
+            "let count: int = int(1)\n"
+            "match count:\n"
+            "    case int(1):\n"
+            '        print("integer")\n'
+            "    else:\n"
+            '        print("other integer")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "enum-match")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "Ok\n43\ntwo\ninteger\n")
+
+    def test_match_rejects_duplicate_and_uncovered_cases(self):
+        incomplete_enum = self.invoke(
+            "incomplete-enum-match.su",
+            "enum State\n"
+            "    Ready\n"
+            "    Busy\n"
+            "end\n"
+            "let state: State = State.Ready\n"
+            "match state:\n"
+            "    case State.Ready:\n"
+            '        print("ready")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(incomplete_enum.returncode, 0)
+        self.assertIn("match is missing enum variant 'Busy'", incomplete_enum.stderr)
+
+        duplicate_case = self.invoke(
+            "duplicate-match-case.su",
+            "let active: bool = true\n"
+            "match active:\n"
+            "    case true:\n"
+            '        print("yes")\n'
+            "    case true:\n"
+            '        print("also yes")\n'
+            "    else:\n"
+            '        print("no")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(duplicate_case.returncode, 0)
+        self.assertIn("duplicate match case pattern", duplicate_case.stderr)
+
+        incomplete_bool = self.invoke(
+            "incomplete-bool-match.su",
+            "let active: bool = true\n"
+            "match active:\n"
+            "    case true:\n"
+            '        print("yes")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(incomplete_bool.returncode, 0)
+        self.assertIn("match on bool must cover 'true' and 'false'",
+                      incomplete_bool.stderr)
+
+    def test_match_accepts_exhaustive_enum_and_bool_without_else(self):
+        result = self.invoke(
+            "exhaustive-match.su",
+            "enum State\n"
+            "    Ready\n"
+            "    Busy\n"
+            "end\n"
+            "def state_name(state: State): string\n"
+            "    match state:\n"
+            "        case State.Ready:\n"
+            '            return "ready"\n'
+            "        case State.Busy:\n"
+            '            return "busy"\n'
+            "    end\n"
+            "end\n"
+            "def bool_name(value: bool): string\n"
+            "    match value:\n"
+            "        case true:\n"
+            '            return "true"\n'
+            "        case false:\n"
+            '            return "false"\n'
+            "    end\n"
+            "end\n"
+            "print(state_name(State.Busy))\n"
+            "print(bool_name(false))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "exhaustive-match")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "busy\nfalse\n")
+
+    def test_nested_functions_capture_variables_by_reference(self):
+        result = self.invoke(
+            "nested-functions.su",
+            "def run(): number\n"
+            "    let total: number = 0\n"
+            "    def add(value: number)\n"
+            "        total = total + value\n"
+            "    end\n"
+            "    def sum(value: int): int\n"
+            "        if value <= int(0):\n"
+            "            return int(0)\n"
+            "        end\n"
+            "        return value + sum(value - int(1))\n"
+            "    end\n"
+            "    add(3)\n"
+            "    add(4)\n"
+            "    return total + number(sum(int(4)))\n"
+            "end\n"
+            "print(run())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "nested-functions")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "17\n")
+
+    def test_nested_function_is_not_visible_outside_its_scope(self):
+        result = self.invoke(
+            "nested-function-scope.su",
+            "def outer()\n"
+            "    def hidden()\n"
+            "        print(\"hidden\")\n"
+            "    end\n"
+            "end\n"
+            "outer()\n"
+            "hidden()\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown function 'hidden'", result.stderr)
 
     def test_try_catches_input_errors_but_not_compile_errors(self):
         result = self.invoke(
@@ -930,34 +2317,50 @@ class SunCompilerTests(unittest.TestCase):
     def test_rejects_incompatible_static_types(self):
         result = self.invoke(
             "wrong-type.su",
-            'func invalid()\n'
+            'def invalid()\n'
             '    let count: number = "three"\n'
             "end\n",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot initialize double with a std::string value", result.stderr)
+        self.assertIn("= help: Make the expression's type match", result.stderr)
 
     def test_reports_unknown_function_with_source_line(self):
         result = self.invoke("bad-call.su", 'print("start")\nmissing()\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 2: error: unknown function 'missing'", result.stderr)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("bad-call.su:2:1", result.stderr)
+        self.assertIn("  2 | missing()", result.stderr)
+        self.assertIn("    | ^^^^^^^", result.stderr)
         self.assertFalse((WORK / "bad-call.cpp").exists())
 
-    def test_reports_missing_end(self):
-        result = self.invoke("open-block.su", "func hello()\nprint(\"hi\")\n")
+    def test_unknown_function_in_expression_has_a_direct_explanation(self):
+        result = self.invoke(
+            "unknown-expression-call.su",
+            "let result: number = missing()\n",
+            "--check",
+        )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 3: error: function 'hello' is missing 'end'", result.stderr)
+        self.assertIn("error: unknown function 'missing'", result.stderr)
+        self.assertIn("= help: Check the spelling or declare the function", result.stderr)
+
+    def test_reports_missing_end(self):
+        result = self.invoke("open-block.su", "def hello()\nprint(\"hi\")\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("error: function 'hello' is missing 'end'", result.stderr)
+        self.assertIn("= help: Add 'end' to close the function", result.stderr)
 
     def test_rejects_wrong_argument_count(self):
-        result = self.invoke("wrong-args.su", 'func greet(name)\nend\ngreet()\n')
+        result = self.invoke("wrong-args.su", 'def greet(name)\nend\ngreet()\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 3: error: function 'greet' expects 1 argument(s), got 0",
+        self.assertIn("error: function 'greet' expects 1 argument(s), got 0",
                       result.stderr)
+        self.assertIn("= help: Check the function declaration", result.stderr)
 
     def test_rejects_nul_in_string_literal(self):
         result = self.invoke("nul-string.su", 'print("before\x00after")\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("line 1: error: NUL byte is not allowed in string literal", result.stderr)
+        self.assertIn("error: NUL byte is not allowed in string literal", result.stderr)
         self.assertFalse((WORK / "nul-string.cpp").exists())
 
 

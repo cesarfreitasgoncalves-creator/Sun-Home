@@ -1,0 +1,100 @@
+inline cpp:
+#include <cstdlib>
+#include <filesystem>
+#include <system_error>
+
+std::vector<std::string> sun_sys_arguments;
+
+void sun_sys_initialize(int argc, char** argv) {
+    sun_sys_arguments.clear();
+    for (int index = 1; index < argc; ++index) {
+        sun_sys_arguments.emplace_back(argv[index]);
+    }
+}
+
+std::string sun_sys_platform() {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__linux__)
+    return "linux";
+#elif defined(__unix__)
+    return "unix";
+#else
+    return "unknown";
+#endif
+}
+
+std::string sun_sys_cwd() {
+    std::error_code error;
+    const auto path = std::filesystem::current_path(error);
+    if (error) {
+        throw std::runtime_error("sys.cwd failed: " + error.message());
+    }
+    return path.string();
+}
+
+std::string sun_sys_env(const std::string& name, const std::string& fallback) {
+    const auto* value = std::getenv(name.c_str());
+    return value ? std::string(value) : fallback;
+}
+
+bool sun_sys_env_exists(const std::string& name) {
+    return std::getenv(name.c_str()) != nullptr;
+}
+
+void sun_sys_exit(std::int64_t code) {
+    if (code < std::numeric_limits<int>::min() ||
+        code > std::numeric_limits<int>::max()) {
+        throw std::runtime_error("sys.exit code is out of range for the host system");
+    }
+    std::exit(static_cast<int>(code));
+}
+endcpp
+
+def args(): list[string]
+    let result: list[string] = []
+    inline cpp:
+        result = sun_sys_arguments;
+    endcpp
+    return result
+end
+
+def platform(): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_platform();
+    endcpp
+    return result
+end
+
+def cwd(): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_cwd();
+    endcpp
+    return result
+end
+
+def env(name: string, fallback: string): string
+    let result: string = ""
+    inline cpp:
+        result = sun_sys_env(name, fallback);
+    endcpp
+    return result
+end
+
+def env_exists(name: string): bool
+    let result: bool = false
+    inline cpp:
+        result = sun_sys_env_exists(name);
+    endcpp
+    return result
+end
+
+def exit(code: int)
+    inline cpp:
+        sun_sys_exit(code);
+    endcpp
+end

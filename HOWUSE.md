@@ -28,6 +28,18 @@ build/sun --help
 O core esta dividido em `src/main.cpp` (CLI), `src/lexer.cpp` (tokens),
 `src/parser.cpp` (sintaxe e verificacao de tipos), `src/codegen.cpp` (geracao
 de C++) e `src/compiler.hpp` (tipos e interface entre os modulos).
+`print`, suas expressoes e as instrucoes de controle sao mantidos como nos
+estruturados entre parser e gerador. Nas demais instrucoes, a conversao das
+expressoes ainda ocorre durante a analise e pode ser migrada incrementalmente.
+
+Para verificar sintaxe e tipos sem gravar C++ nem executar o compilador C++:
+
+```sh
+build/sun examples/hello.su --check
+```
+
+Em caso de erro, Sun mostra a linha e um trecho do codigo com um marcador de
+posicao. `--check` nao pode ser combinado com `--compile`, `-o` ou `--compiler`.
 
 ## 3. Transpilar e compilar um programa
 
@@ -73,7 +85,7 @@ build/sun examples/hello.su -o -
 Crie um arquivo chamado `ola.su`:
 
 ```sun
-func cumprimentar(nome)
+def cumprimentar(nome)
     print(f"Ola, {nome}!")
 end
 
@@ -87,10 +99,46 @@ build/sun ola.su --compile
 ./ola
 ```
 
-`func` inicia uma funcao e `end` encerra o bloco. A indentacao e recomendada
+`def` inicia uma funcao e `end` encerra o bloco. A indentacao e recomendada
 para facilitar a leitura, mas atualmente e `end` que determina onde o bloco
 termina. Funcoes aceitam parametros de texto; chamadas podem aparecer antes ou
 depois da declaracao da funcao.
+
+Chamadas aceitam argumentos nomeados usando `nome=valor`. Eles podem vir depois
+dos posicionais e podem ser escritos em qualquer ordem; parametros omitidos
+usam seus valores padrao:
+
+```sun
+def greet(name: string, punctuation: string = "!")
+    print("Hello, " + name + punctuation)
+end
+
+greet(punctuation="?", name="Ada")
+```
+
+O suporte se aplica a funcoes e metodos declarados em Sun e a construtores de
+tipos Sun. Funcoes integradas, bibliotecas e metodos de colecao continuam
+recebendo argumentos posicionais.
+
+Uma funcao tambem pode receber argumentos extras com parametros tipados:
+`*values: int` coleta os posicionais restantes em `list[int]`;
+`**options: string` coleta nomes extras em `dict[string, string]`. Os tipos
+dos valores extras sao escalares e explicitos. Desempacotamento na chamada
+aceita uma lista tipada em `*values` (`func(*items)`) ou um dicionario de
+chaves string em `**options` (`func(**options)`). O desempacotamento de
+`**kwargs` requer que a funcao tenha somente esse parametro variadico; nao se
+pode combinar um dicionario desempacotado com argumentos nomeados explicitos.
+Para `*args`, os argumentos fixos devem vir antes da lista, sem outros valores
+posicionais variadicos na mesma chamada:
+
+```sun
+def report(*values: int, **options: string)
+    print(values)
+    print(options)
+end
+
+report(int(3), int(5), label="total", mode="brief")
+```
 
 ## 5. Strings e interpolacao
 
@@ -98,25 +146,41 @@ Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t` e
 `\r`. O operador `+` concatena texto:
 
 ```sun
-func mostrar(nome)
+def mostrar(nome)
     print("Ola, " + nome + "!")
 end
 ```
 
-### F-strings
-
-Coloque `f` antes das aspas e o nome de um parametro ou variavel local entre
-chaves:
+Strings oferecem `upper()`, `lower()` e `trim()`; `split(separador)` retorna
+`list[string]`; `replace(busca, substituicao)` retorna uma nova string;
+`contains(texto)`, `starts_with(prefixo)` e `ends_with(sufixo)` retornam `bool`.
+`split` e `replace` rejeitam o texto de busca vazio com um erro de runtime.
+As transformacoes de maiusculas/minusculas e `trim()` operam por byte usando o
+locale C ativo; as demais operacoes preservam os bytes UTF-8 sem normalizacao.
 
 ```sun
-func mostrar(nome)
+let title: string = "  Sun language  ".trim().replace("Sun", "Moon")
+print(title.upper())
+print(title.split(" "))
+```
+
+### F-strings
+
+Coloque `f` antes das aspas e escreva expressoes Sun entre chaves:
+
+```sun
+def mostrar(nome)
     print(f"Ola, {nome}!")
+    print(f"2 + 3 = {2 + 3}")
     print(f"Chaves literais: {{ e }}")
 end
 ```
 
-As chaves duplas `{{` e `}}` representam chaves literais. A interpolacao aceita
-nomes de valores, mas nao expressoes arbitrarias dentro das chaves.
+As expressoes interpoladas usam as regras normais de tipos e podem conter
+operacoes, chamadas de funcao e acesso a itens. O resultado e convertido para
+texto. Regioes de memoria e valores de classes/structs nao podem ser
+interpolados diretamente. As chaves duplas `{{` e `}}` representam chaves
+literais.
 
 ### Marcador `%v`
 
@@ -124,7 +188,7 @@ Para passar valores junto com uma string de formato, associe cada `%v` a um
 argumento `%v=valor`:
 
 ```sun
-func mostrar(nome)
+def mostrar(nome)
     print("Seu nome e %v.", %v=nome)
     print("%v gosta de %v.", %v=nome, %v="Sun")
     print("Progresso: 100%%, %v esta online.", %v=nome)
@@ -147,7 +211,7 @@ tipo explicito:
 ```sun
 import math
 
-func classificar(x: number)
+def classificar(x: number)
     let magnitude: number = math.sqrt(x * x)
     let pontuacao: number = magnitude + 2 * 3
 
@@ -167,12 +231,27 @@ As variaveis declaradas com `let` e os parametros podem ser reatribuidos com
 `nome = expressao`; a expressao precisa ter o mesmo tipo:
 
 ```sun
-func contar(): number
+def contar(): number
     let total: number = 0
     total = total + 1
     return total
 end
 ```
+
+Use `const nome: tipo = expressao` para declarar uma constante imutavel. O tipo
+e explicito e o inicializador precisa ser uma expressao escalar que possa ser
+calculada com seguranca durante a compilacao; outras constantes podem ser
+usadas no calculo:
+
+```sun
+const base: int = int(20)
+const resposta: int = base + int(22)
+print(resposta)
+```
+
+O compilador substitui usos dessas constantes pelo valor calculado. Valores
+mutaveis e operacoes que podem falhar, como divisao por zero, nao sao aceitos
+como inicializadores de `const`.
 
 Operadores aritmeticos: `+`, `-`, `*`, `/` e `%` (resto). `+` tambem concatena
 duas strings. `int` e um inteiro assinado de 64 bits: sua divisao trunca em
@@ -193,6 +272,14 @@ Operadores logicos `not`, `and` e `or` aceitam somente valores booleanos.
 `not` tem precedencia acima de `and`, que tem precedencia acima de `or`.
 `and` e `or` usam curto-circuito: a expressao da direita so e avaliada quando
 necessario.
+
+O compilador avalia expressoes constantes durante a compilacao, incluindo
+operacoes aritmeticas, comparacoes e algumas funcoes matematicas e integradas.
+Operacoes que podem falhar, como divisao por zero ou overflow de `int`, continuam
+no programa gerado para preservar o erro em runtime.
+
+Use `assert(condicao)` para verificar uma condicao `bool`. Se ela for falsa,
+gera o erro de runtime `assertion failed`, que pode ser tratado com `try`/`catch`.
 
 ### Entrada tipada
 
@@ -234,9 +321,87 @@ print(len(notas))
 Os tipos de elemento aceitos sao `number`, `int`, `string`, `bool` e `char`.
 Indices comecam em zero; leitura e escrita fora dos limites, ou com indice
 negativo/fracionario, geram erro de runtime. `append` exige um item do mesmo
-tipo. `len` aceita listas e strings. Listas podem ser passadas e retornadas de
+tipo. `contains(item)` testa presenca. `remove(item)` apaga a primeira
+ocorrencia e retorna `bool`. `insert(index, item)` aceita indices entre zero e
+`len(lista)`, incluindo o final. `pop(index)` remove e retorna um item. Os
+indices de `insert` e `pop` podem ser `int` ou `number`; valores fracionarios
+ou fora do intervalo geram erro de runtime. `clear()` esvazia a lista.
+`len` aceita listas e strings. Listas podem ser passadas e retornadas de
 funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
-aninhadas e listas de `region` nao sao suportadas.
+aninhadas, listas de `region` e listas de tuplas nao sao suportadas.
+
+### Funcoes integradas para colecoes e numeros
+
+`sum(lista)` soma listas de `int` ou `number`; listas tipadas vazias resultam em
+zero, e a soma de `int` detecta overflow. `all(lista_bool)` retorna `true`
+quando todos os itens sao verdadeiros (inclusive para lista vazia), enquanto
+`any(lista_bool)` retorna `true` quando pelo menos um item e verdadeiro.
+`min(a, b)` e `max(a, b)` comparam numeros; argumentos mistos `int`/`number`
+resultam em `number`, e valores `NaN` fazem o resultado ser `NaN`.
+`round(valor)` arredonda para o inteiro mais proximo, retornando `number`; com
+`round(valor, casas)` arredonda para o numero de casas decimais indicado por um
+`int` (casas negativas arredondam para dezenas, centenas etc.). Empates como
+`2.5` e `-2.5` arredondam para longe de zero. `abs`, `floor`, `ceil` e `trunc`
+aceitam `number` ou `int` e retornam `number`; essas operacoes nao exigem
+`import math`.
+
+### Dicionarios
+
+Dicionarios declaram os tipos homogeneos de chave e valor com
+`dict[chave, valor]`. As chaves aceitas sao `string`, `int`, `bool` e `char`;
+os valores podem ser `string`, `number`, `int`, `bool` ou `char`. Um dicionario
+vazio precisa de anotacao de tipo:
+
+```sun
+let notas: dict[string, number] = {}
+notas["Ada"] = 10
+notas["Lin"] = 9.5
+print(notas.contains("Ada"))
+print(notas["Ada"])
+print(len(notas))
+let removida: bool = notas.remove("Lin")
+
+for nome in notas:
+    print(nome)
+end
+```
+
+Literais tambem podem ser escritos como `{"Ada": 10, "Lin": 9.5}`. A leitura
+de uma chave inexistente gera erro de runtime; a atribuicao insere ou atualiza
+a chave. A iteracao visita as chaves em ordem crescente. Dicionarios aninhados,
+valores compostos e chaves `number` nao sao suportados.
+`dicionario.contains(chave)` devolve `bool`. `dicionario.remove(chave)` remove
+a entrada e devolve `true` se ela existia ou `false` se nao existia; tambem pode
+ser chamada como instrucao quando o resultado nao e necessario.
+`dicionario.keys()` e `.values()` retornam listas na ordem das chaves do
+dicionario. `dicionario.get(chave, padrao)` retorna o valor armazenado ou o
+padrao quando a chave nao existe; o padrao precisa ter o tipo dos valores.
+`dicionario.clear()` remove todas as entradas.
+
+### Tuplas
+
+Tuplas juntam valores de tipos escalares diferentes em uma estrutura fixa e
+imutavel:
+
+```sun
+def rotulo(par: tuple[int, string]): tuple[string, int]
+    return (par[1], par[0])
+end
+
+let pessoa: tuple[int, string] = (int(12), "Ada")
+let invertida: tuple[string, int] = rotulo(pessoa)
+print(pessoa)
+print(pessoa[1])
+print(invertida)
+```
+
+Uma tupla pode conter `string`, `number`, `bool`, `int` ou `char`. A anotacao
+lista os tipos na ordem dos elementos; tuplas de um item usam a forma
+`tuple[bool]` e literal `(true,)`. Os indices precisam ser literais inteiros
+nao negativos, verificados durante a compilacao. Tuplas podem ser atribuidas,
+passadas e retornadas, e comparadas com outra tupla do mesmo tipo. Atribuir a
+um elemento, aninhar tuplas ou colocar tuplas em listas/dicionarios nao e
+suportado.
 
 Loops usam condicoes booleanas, iteracao por lista e iteracao numerica por
 intervalo:
@@ -266,7 +431,7 @@ retorna `void`. Todo caminho de uma funcao com retorno tipado deve retornar um
 valor do tipo declarado:
 
 ```sun
-func dobro(valor: number): number
+def dobro(valor: number): number
     return valor * 2
 end
 
@@ -279,7 +444,7 @@ valido em funcoes sem tipo de retorno.
 Parametros podem ter valores padrao no final da lista:
 
 ```sun
-func cumprimentar(nome: string = "mundo", vezes: number = 1)
+def cumprimentar(nome: string = "mundo", vezes: number = 1)
     for i in range(0, vezes):
         print(f"Ola, {nome}!")
     end
@@ -294,14 +459,41 @@ constantes do tipo declarado, mas nao podem depender de variaveis nem chamar
 funcoes. Ao chamar a funcao, pode-se omitir qualquer sufixo de parametros que
 tenha default.
 
-`istype(valor, tipo)` compara o tipo estatico de um valor com `string`,
-`number`, `bool`, `int`, `char` ou `region` (que requer `import memory`) e
-devolve `bool`:
+Funcoes tambem podem ser declaradas dentro de outra funcao ou bloco. Elas so
+ficam visiveis no escopo onde foram declaradas e podem capturar variaveis
+visiveis do escopo externo por referencia, inclusive para altera-las:
+
+```sun
+def executar(): number
+    let total: number = 0
+    def adicionar(valor: number)
+        total = total + valor
+    end
+    adicionar(3)
+    adicionar(4)
+    return total
+end
+
+print(executar())
+```
+
+Funcoes aninhadas aceitam parametros tipados, retorno tipado e parametros com
+valores padrao constantes, inclusive recursao. Como nos defaults de funcoes de
+nivel superior, os valores padrao nao podem chamar funcoes.
+
+`istype(valor, tipo)` compara o tipo estatico de um valor com os tipos
+escalares `string`, `number`, `bool`, `int` e `char`, ou com as categorias
+`list`, `dict` e `tuple`. `region` tambem pode ser consultado quando
+`import memory` esta ativo. As categorias reconhecem colecoes independentemente
+dos tipos dos elementos ou das chaves:
 
 ```sun
 let idade: number = 20
 print(istype(idade, number))
 print(istype(idade, string))
+print(istype([1, 2], list))
+print(istype({"Ada": 12}, dict))
+print(istype(("Ada", int(12)), tuple))
 ```
 
 Como Sun e estaticamente tipada, `istype` e decidido durante a compilacao e
@@ -325,10 +517,12 @@ end
 Essas instrucoes geram erro se forem usadas fora de um loop.
 
 `import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
-funcoes `math.abs`, `math.ceil`, `math.cos`, `math.exp`, `math.floor`,
-`math.log`, `math.pow`, `math.sin`, `math.sqrt` e `math.tan`. Essas funcoes
-recebem numeros; todas, exceto `math.pow`, recebem um argumento. A biblioteca e
-implementada usando `<cmath>` do C++.
+funcoes `math.abs`, `math.acos`, `math.asin`, `math.atan`, `math.atan2`,
+`math.ceil`, `math.cos`, `math.exp`, `math.floor`, `math.fmod`, `math.hypot`,
+`math.log`, `math.log10`, `math.log2`, `math.pow`, `math.sin`, `math.sqrt`,
+`math.tan` e `math.trunc`. Todas recebem um ou dois argumentos numericos; todas,
+exceto `math.atan2`, `math.fmod`, `math.hypot` e `math.pow`, recebem um. A
+biblioteca e implementada usando `<cmath>` do C++.
 
 ### Modulos locais
 
@@ -337,17 +531,64 @@ relativo sem extensao e um alias. O modulo local e separado da biblioteca
 padrao: `import math` continua escolhendo a stdlib, enquanto `import local/math`
 carrega `local/math.su`.
 
-```sun
-import local/math as (math_local)
+Use `export def` para declarar a API publica de um modulo. Quando um modulo
+usa pelo menos uma declaracao explicita de exportacao, somente as funcoes
+marcadas ficam disponiveis ao importador; as demais podem ser usadas como
+helpers internos. Para manter compatibilidade, modulos sem `export def`
+continuam exportando todas as funcoes de nivel superior:
 
-let result: number = math_local.sqrt(4)
-print(result)
+```sun
+import math
+
+export def distance(x: number, y: number): number
+    return math.sqrt(x * x + y * y)
+end
+
+def clamp(value: number): number
+    if value < 0:
+        return 0
+    end
+    return value
+end
+```
+
+O importador acessa `distance`, mas `clamp` permanece privado quando o modulo
+declara exports explicitamente:
+
+```sun
+import local/geometry as geometry
+
+print(geometry.distance(3, 4))
 ```
 
 O alias entre parenteses e opcional. Modulos locais podem importar outros
 modulos locais; ciclos sao reportados como erro. Por enquanto, eles exportam
 funcoes e blocos `inline cpp` globais. Instrucoes executaveis no nivel superior
 de um modulo nao sao aceitas.
+
+## Biblioteca `sys`
+
+`import sys` carrega o primeiro modulo da biblioteca padrao, escrito em
+`stdlib/sys.su` e implementado com funcoes Sun e `inline cpp`:
+
+```sun
+import sys
+
+print(sys.args())
+print(sys.platform())
+print(sys.cwd())
+print(sys.env("HOME", ""))
+print(sys.env_exists("HOME"))
+sys.exit(int(0))
+```
+
+`sys.args()` retorna uma lista com os argumentos passados ao executavel,
+excluindo o nome do executavel. `sys.platform()` retorna `windows`, `macos`,
+`linux`, `unix` ou `unknown`. `sys.exit(code)` encerra o processo com um codigo
+de saida que precisa caber no tipo `int` do sistema.
+`sys.cwd()` retorna o diretorio de trabalho atual. `sys.env(name, fallback)`
+retorna o valor de uma variavel de ambiente ou o texto alternativo informado;
+`sys.env_exists(name)` informa se ela esta definida.
 
 ### Structs, enums e classes simples
 
@@ -369,11 +610,11 @@ end
 class Counter
     value: int
 
-    func init(start: int)
+    def init(start: int)
         self.value = start
     end
 
-    func increment()
+    def increment()
         self.value = self.value + int(1)
     end
 end
@@ -389,8 +630,49 @@ print(counter.value)
 
 Tipos customizados podem ser usados em parametros, retornos e variaveis.
 Campos podem usar os tipos escalares ja suportados, mas nao outros tipos
-customizados ou listas. Heranca, classes genericas e listas de objetos ainda nao
-sao suportadas.
+customizados ou listas. Heranca entre classes comuns, classes genericas e listas
+de objetos ainda nao sao suportadas. Uma classe de erro pode herdar diretamente
+de `AnError`, conforme descrito na secao de erros.
+
+Enums podem declarar variantes com campos escalares, e `match` seleciona um
+bloco por valor ou variante. Os campos de uma variante podem ser ligados a nomes
+no padrao; `_` ignora um campo. Casos repetidos sao rejeitados. Sem `else`,
+um `match` de enum precisa cobrir todas as variantes e um `match` de `bool`
+precisa cobrir `true` e `false`; para outros valores escalares, `else` e
+opcional. Nao ha fallthrough:
+
+```sun
+enum Result
+    Ok(value: number)
+    Error(message: string)
+    Pending
+end
+
+let result: Result = Result.Ok(42)
+match result:
+    case Result.Ok(value):
+        print(value)
+    case Result.Error(message):
+        print(message)
+    case Result.Pending:
+        print("pending")
+end
+
+match 2:
+    case 1:
+        print("one")
+    case 2:
+        print("two")
+    else:
+        print("other")
+end
+```
+
+Os tipos dos valores de cada payload devem ser escalares (`string`, `number`,
+`bool`, `int` ou `char`). Padroes escalares precisam ter o mesmo tipo do valor
+analisado; para `int` e `char`, escreva a conversao literal, como `int(1)` ou
+`char("A")`. A variante enum pode ser impressa; a representacao mostra o nome
+da variante.
 
 O exemplo executavel completo esta em `examples/classes.su`:
 
@@ -418,7 +700,13 @@ print(io.exists(path))
 
 `io.write_text(path, contents)` cria ou substitui o arquivo;
 `io.append_text(path, contents)` acrescenta ao final; `io.read_text(path)`
-retorna o conteudo completo como `string`; `io.exists(path)` retorna `bool`.
+retorna o conteudo completo como `string`; `io.exists(path)` verifica se o
+caminho existe. `io.read_lines(path)` devolve as linhas como `list[string]`;
+`io.is_directory(path)` verifica se o caminho e um diretorio;
+`io.create_directories(path)` cria a arvore de diretorios e retorna `true` se
+algo foi criado; `io.remove(path)` remove um arquivo ou diretorio vazio e
+retorna se removeu algo; `io.file_size(path)` retorna o tamanho em bytes como
+`int`.
 Erros ao abrir, ler ou gravar arquivos geram erros de runtime Sun e podem ser
 capturados com `try`/`catch`. A implementacao C++ isolada da biblioteca fica em
 `src/stdlib_io.cpp`, e o runtime necessario e incluido no C++ gerado.
@@ -457,13 +745,17 @@ comparado diretamente.
 Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
 que ainda nao existem na linguagem. O terminador e `endcpp`:
 
+> **Aviso:** o conteudo de `inline cpp` e compilado e executado como C++ nativo,
+> com os mesmos privilegios do programa. Sun nao o isola, valida nem torna
+> seguro. Use somente com codigo confiavel; esse recurso nao e uma sandbox.
+
 ```sun
 inline cpp:
 #include <iostream>
 int helper_cpp() { return 42; }
 endcpp
 
-func mostrar(valor: number)
+def mostrar(valor: number)
     let resposta: number = valor + 2
     inline cpp:
         std::cout << valor << " + 2 = " << resposta << '\n';
@@ -480,17 +772,22 @@ os parametros e variaveis Sun visiveis ali, usando seus nomes originais.
 Identificadores C++ reservados nao podem ser expostos como aliases.
 
 O trecho inline precisa ser C++ valido e compativel com o compilador escolhido.
-Ele e codigo nativo sem isolamento: pode afetar qualquer estado acessivel ao
-programa. Sun nao valida nem torna seguro esse C++.
+Ele pode acessar ou afetar qualquer estado disponivel ao programa, inclusive
+arquivos e outros recursos do sistema operacional, sujeito aos privilegios do
+processo.
 
 ## 10. Comentarios e regras atuais
 
-Linhas vazias e comentarios de linha inteira iniciados por `#` sao ignorados:
+Linhas vazias e comentarios iniciados por `#` sao ignorados. O comentario pode
+aparecer depois de uma instrucao e nao altera `#` dentro de uma string:
 
 ```sun
 # Este e um comentario
-print("Ola!")
+print("Ola!") # comentario no fim da linha
 ```
+
+Dentro de `inline cpp`, as linhas sao copiadas literalmente; use os comentarios
+normais de C++ (`//` ou `/* ... */`) nesse bloco.
 
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
 tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
@@ -499,38 +796,119 @@ aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
 loops `while`, `for` por `range` e `for` por lista, retornos tipados,
 `try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
 `memory`, `istype`, parametros com valores padrao, imports de modulos locais,
-structs, enums, classes simples e C++ inline. Ainda nao ha funcoes aninhadas,
-heranca ou comentarios no fim de uma linha.
+structs, enums com payload, `match`, classes simples, funcoes aninhadas,
+dicionarios e C++ inline. Heranca entre classes comuns ainda nao e suportada;
+classes de erro podem herdar de `AnError`.
 
 ## 11. Erros e acessibilidade
 
-Mensagens de erro incluem o numero da linha para ajudar a localizar o problema.
-Por exemplo:
+Erros de sintaxe e tipos aparecem imediatamente com arquivo, linha, coluna e
+trecho destacado. Quando possivel, Sun tambem sugere como corrigir o problema:
 
 ```text
-sun: line 3: error: unknown function 'desconhecida'
+error: unknown function 'desconhecida'
+ --> app.su:3:1
+  |
+3 | desconhecida()
+  | ^^^^^^^^^^^^
+  = help: Check the spelling or declare the function with 'def desconhecida(...)'.
 ```
 
 As mensagens sao texto simples, sem depender de cores, e os erros vao para
 `stderr`; isso permite ler a saida em terminais simples e encaminha-la para
-ferramentas assistivas. Use `-h` ou `--help` para consultar as opcoes sem
-precisar memoriza-las. A indentacao consistente e nomes descritivos ajudam a
-manter os exemplos faceis de navegar.
+ferramentas assistivas. As sugestoes de `help` aparecem junto com o diagnostico,
+sem exigir uma opcao ou comando separado.
 
-Use `try`/`catch nome:` para capturar erros de runtime produzidos por Sun
-(por exemplo, conversao ou indice invalido). O nome do `catch` recebe a
-mensagem como `string`:
+Use `try` com um ou mais `except Tipo [as nome]:` para tratar erros por tipo.
+`as nome` e opcional e, quando informado, recebe a mensagem como `string`.
+Os handlers sao testados na ordem em que aparecem; coloque os tipos mais
+especificos antes de `AnError`:
 
 ```sun
 try:
     let idade: int = input("Idade: ", int)
-catch erro:
-    print(f"Entrada invalida: {erro}")
+except AnError as mensagem:
+    print(f"Erro de runtime: {mensagem}")
 end
 ```
 
-`catch` nao captura erros de sintaxe/tipo da compilacao nem excecoes arbitrarias
-de C++ inline.
+As operacoes de runtime do Sun (como conversoes, indices invalidos e erros de
+entrada) sao capturadas por `AnError`. Erros fatais e excecoes arbitrarias de
+C++ nao pertencem a essa hierarquia e nao sao capturados por `except AnError`.
+`AnError` deve ser o ultimo handler, pois funciona como wildcard para os erros
+Sun que ainda nao foram capturados por handlers anteriores. Os handlers
+tipados aceitam `AnError` ou qualquer classe derivada dela.
+
+Um bloco `finally:` opcional pode vir depois dos handlers, ou sozinho depois
+do corpo `try`. Ele executa ao sair do bloco, inclusive quando ocorre `return`
+ou uma excecao nao tratada:
+
+```sun
+try:
+    let contents: string = io.read_text("config.txt")
+except AnError as erro:
+    print(erro)
+finally:
+    print("Operacao finalizada")
+end
+```
+
+`finally` nao pode conter `return`, `break` ou `continue` que tentem escapar do
+bloco. Se ele lancar uma excecao durante a propagacao de outra excecao, a
+excecao original continua sendo propagada. Como em outras linguagens, ele nao
+executa se o processo for encerrado diretamente por `sys.exit`, `abort`, falha
+de memoria/segmentacao ou encerramento externo.
+
+Para blocos `inline cpp` executados dentro de um `try`, use `except cppCatcher`
+para capturar excecoes C++ lancadas pelo proprio bloco. `as nome` e opcional;
+quando usado, a variavel recebe a mensagem da excecao:
+
+```sun
+try:
+    inline cpp:
+        throw std::runtime_error("falha nativa");
+    endcpp
+except cppCatcher as erro:
+    print(erro)
+except AnError:
+    print("Outro erro Sun")
+end
+```
+
+`cppCatcher` captura excecoes C++ padrao e excecoes lancadas com `throw` que
+nao derivam de `std::exception` (estas recebem uma mensagem generica). Ele nao
+captura falhas fatais do processo, como `abort`, falhas de memoria/segmentacao
+ou encerramento via `exit`. Excecoes C++ fora de blocos `inline cpp` nao sao
+convertidas para esse handler.
+
+Erros personalizados herdam da classe-base `AnError` e sao lancados com
+`raise`. O metodo `init`, quando declarado, precisa receber a mensagem como
+primeiro argumento `string`; os demais parametros podem inicializar campos do
+erro:
+
+```sun
+class ValidationError(AnError)
+    code: int
+    def init(message: string, code: int)
+        self.code = code
+    end
+end
+
+try:
+    raise ValidationError("entrada invalida", int(12))
+except ValidationError as mensagem:
+    print(mensagem)
+except AnError:
+    print("Outro erro")
+end
+```
+
+`raise` aceita somente um valor de `AnError` ou de uma classe que herde dela.
+`catch nome:` continua disponivel para compatibilidade e captura erros de
+runtime Sun, disponibilizando a mensagem como `string`.
+
+Handlers `except` nao capturam erros de sintaxe/tipo da compilacao nem excecoes
+arbitrarias de C++ inline.
 
 Problemas comuns:
 

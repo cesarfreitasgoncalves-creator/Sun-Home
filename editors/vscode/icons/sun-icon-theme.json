@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "_sun": {
+      "iconPath": "./sun.svg"
+    }
+  },
+  "fileExtensions": {
+    "su": "_sun"
+  }
+}

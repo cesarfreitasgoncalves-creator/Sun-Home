@@ -12,8 +12,10 @@ struct Token {
     Kind kind;
     std::string text;
     bool fstring = false;
+    Keyword keyword = Keyword::none;
 };
 
 std::vector<Token> tokenize(const std::string& source, std::size_t line);
+Keyword keyword_at_start(const std::string& source);
 
 } // namespace sun

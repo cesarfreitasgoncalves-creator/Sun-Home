@@ -1,4 +1,5 @@
 #include "modules.hpp"
+#include "lexer.hpp"
 
 #include <fstream>
 #include <map>
@@ -8,6 +9,10 @@
 #include <utility>
 #include <vector>
 
+#ifndef SUN_STDLIB_DIR
+#define SUN_STDLIB_DIR "stdlib"
+#endif
+
 namespace sun {
 namespace {
 
@@ -16,6 +21,7 @@ namespace fs = std::filesystem;
 struct Import {
     std::string path;
     std::string alias;
+    bool standard = false;
 };
 
 struct LoadedModule {
@@ -24,6 +30,7 @@ struct LoadedModule {
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
 };
 
 std::string trim(const std::string& value) {
@@ -39,6 +46,11 @@ bool identifier_start(char c) {
 
 bool identifier_char(char c) {
     return identifier_start(c) || (c >= '0' && c <= '9');
+}
+
+bool has_export_prefix(const std::string& text) {
+    return text.size() >= 6 && text.compare(0, 6, "export") == 0 &&
+           (text.size() == 6 || text[6] == ' ' || text[6] == '\t');
 }
 
 std::string mangle_path(const fs::path& path) {
@@ -117,6 +129,16 @@ std::string rewrite_names(const std::string& source,
                             i = member_end;
                             continue;
                         }
+                        auto call_start = member_end;
+                        while (call_start < line.size() &&
+                               (line[call_start] == ' ' || line[call_start] == '\t')) {
+                            ++call_start;
+                        }
+                        if (call_start < line.size() && line[call_start] == '(') {
+                            throw std::runtime_error(
+                                "module alias '" + word + "' does not export function '" +
+                                member + "'");
+                        }
                     }
                 }
             }
@@ -137,17 +159,20 @@ std::vector<std::string> lines_of(const std::string& source) {
 }
 
 std::string function_name(const std::string& line) {
-    const auto text = trim(line);
-    if (text.rfind("func ", 0) != 0) return {};
-    const auto start = std::string("func ").size();
+    auto text = trim(line);
+    if (has_export_prefix(text)) text = trim(text.substr(6));
+    if (keyword_at_start(text) != Keyword::def) return {};
+    const auto start = std::string("def ").size();
     const auto open = text.find('(', start);
     if (open == std::string::npos) return {};
     return trim(text.substr(start, open - start));
 }
 
 bool is_block_start(const std::string& text) {
-    return text == "try:" || text.rfind("if ", 0) == 0 ||
-           text.rfind("while ", 0) == 0 || text.rfind("for ", 0) == 0;
+    const auto keyword = keyword_at_start(text);
+    return !function_name(text).empty() || keyword == Keyword::try_ ||
+           keyword == Keyword::if_ || keyword == Keyword::while_ ||
+           keyword == Keyword::for_ || keyword == Keyword::match_;
 }
 
 LoadedModule load_module(const fs::path& module_path, const fs::path& project_root,
@@ -172,6 +197,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -184,6 +210,7 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
             else if (spec == "io") io = true;
+            else if (spec == "sys") imports.push_back({"sys", "sys", true});
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -215,41 +242,84 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     std::map<std::string, std::map<std::string, std::string>> aliases;
     std::ostringstream dependencies;
     for (const auto& import : imports) {
-        fs::path relative(import.path);
-        if (relative.is_absolute() || !relative.extension().empty()) {
-            throw std::runtime_error("local module imports use relative names without extensions");
-        }
-        for (const auto& part : relative) {
-            if (part == "." || part == ".." || part.empty()) {
-                throw std::runtime_error("local module path may not contain '.' or '..'");
+        LoadedModule dependency;
+        if (import.standard) {
+            sys = sys || import.path == "sys";
+            dependency = load_module(fs::path(SUN_STDLIB_DIR) / (import.path + ".su"),
+                                     project_root, loading, cache);
+        } else {
+            fs::path relative(import.path);
+            if (relative.is_absolute() || !relative.extension().empty()) {
+                throw std::runtime_error("local module imports use relative names without extensions");
             }
-            for (const auto c : part.string()) {
-                if (!identifier_char(c)) {
-                    throw std::runtime_error("local module path must contain identifier names");
+            for (const auto& part : relative) {
+                if (part == "." || part == ".." || part.empty()) {
+                    throw std::runtime_error("local module path may not contain '.' or '..'");
+                }
+                for (const auto c : part.string()) {
+                    if (!identifier_char(c)) {
+                        throw std::runtime_error("local module path must contain identifier names");
+                    }
                 }
             }
+            const auto dependency_path = canonical.parent_path() / relative;
+            dependency = load_module(dependency_path.string() + ".su", project_root,
+                                     loading, cache);
         }
-        const auto dependency_path = canonical.parent_path() / relative;
-        auto dependency = load_module(dependency_path.string() + ".su", project_root,
-                                      loading, cache);
         if (!aliases.emplace(import.alias, dependency.exports).second) {
             throw std::runtime_error("duplicate local module alias '" + import.alias + "'");
         }
         math = math || dependency.math;
         memory = memory || dependency.memory;
         io = io || dependency.io;
+        sys = sys || dependency.sys;
         dependencies << dependency.source;
     }
 
     std::map<std::string, std::string> names;
     LoadedModule loaded;
     const auto prefix = mangle_path(fs::relative(canonical, project_root));
+    int declaration_depth = 0;
+    bool declarations_in_cpp = false;
+    bool has_explicit_exports = false;
+    std::set<std::string> explicit_exports;
+    std::vector<std::string> module_functions;
     for (std::size_t i = first_content; i < lines.size(); ++i) {
-        const auto name = function_name(lines[i]);
+        const auto text = trim(lines[i]);
+        if (declarations_in_cpp) {
+            if (text == "endcpp") declarations_in_cpp = false;
+            continue;
+        }
+        if (text == "inline cpp:") {
+            declarations_in_cpp = true;
+            continue;
+        }
+        const bool is_explicit_export = has_export_prefix(text);
+        if (is_explicit_export) {
+            if (declaration_depth != 0) {
+                throw std::runtime_error("exported functions must be declared at module scope");
+            }
+            if (function_name(text).empty()) {
+                throw std::runtime_error("module exports must use 'export def name(...)'");
+            }
+            has_explicit_exports = true;
+        }
+        if (text == "end") {
+            if (declaration_depth > 0) --declaration_depth;
+            continue;
+        }
+        const auto name = declaration_depth == 0 ? function_name(text) : "";
         if (!name.empty()) {
             const auto renamed = prefix + "_" + name;
             names.emplace(name, renamed);
-            loaded.exports.emplace(name, renamed);
+            module_functions.push_back(name);
+            if (is_explicit_export) explicit_exports.insert(name);
+        }
+        if (is_block_start(text)) ++declaration_depth;
+    }
+    for (const auto& name : module_functions) {
+        if (!has_explicit_exports || explicit_exports.find(name) != explicit_exports.end()) {
+            loaded.exports.emplace(name, names.at(name));
         }
     }
 
@@ -265,13 +335,20 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
             in_cpp = true;
             continue;
         }
+        const bool is_explicit_export = has_export_prefix(text);
         if (function_depth == 0) {
             if (text.empty() || text[0] == '#') continue;
-            if (text.rfind("func ", 0) == 0) {
+            if (function_name(text).empty() && is_explicit_export) {
+                throw std::runtime_error("module exports must use 'export def name(...)'");
+            }
+            if (!function_name(text).empty()) {
                 function_depth = 1;
                 continue;
             }
             throw std::runtime_error("local modules may contain imports, functions, and global inline C++ only");
+        }
+        if (is_explicit_export) {
+            throw std::runtime_error("exported functions must be declared at module scope");
         }
         if (is_block_start(text)) ++function_depth;
         else if (text == "end") --function_depth;
@@ -280,11 +357,31 @@ LoadedModule load_module(const fs::path& module_path, const fs::path& project_ro
     if (function_depth != 0) throw std::runtime_error("local module function is missing 'end'");
 
     std::string body;
-    for (std::size_t i = first_content; i < lines.size(); ++i) body += lines[i] + '\n';
+    bool in_module_cpp = false;
+    for (std::size_t i = first_content; i < lines.size(); ++i) {
+        auto line = lines[i];
+        const auto text = trim(line);
+        if (!in_module_cpp && has_export_prefix(text) &&
+            !function_name(text).empty()) {
+            const auto modifier = line.find("export");
+            auto modifier_end = modifier + std::string("export").size();
+            while (modifier_end < line.size() &&
+                   (line[modifier_end] == ' ' || line[modifier_end] == '\t')) {
+                ++modifier_end;
+            }
+            line.erase(modifier, modifier_end - modifier);
+        } else if (text == "inline cpp:") {
+            in_module_cpp = true;
+        } else if (in_module_cpp && text == "endcpp") {
+            in_module_cpp = false;
+        }
+        body += line + '\n';
+    }
     loaded.source = dependencies.str() + rewrite_names(body, names, aliases);
     loaded.math = math;
     loaded.memory = memory;
     loaded.io = io;
+    loaded.sys = sys;
     loading.erase(canonical);
     cache.emplace(canonical, loaded);
     return loaded;
@@ -305,6 +402,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     bool math = false;
     bool memory = false;
     bool io = false;
+    bool sys = false;
     std::size_t first_content = 0;
     while (first_content < lines.size()) {
         const auto line = trim(lines[first_content]);
@@ -317,6 +415,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
             if (spec == "math") math = true;
             else if (spec == "memory") memory = true;
             else if (spec == "io") io = true;
+            else if (spec == "sys") imports.push_back({"sys", "sys", true});
             else if (spec.rfind("local/", 0) == 0) {
                 const auto as = spec.find(" as ");
                 if (as == std::string::npos) {
@@ -341,29 +440,37 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     std::map<std::string, std::map<std::string, std::string>> aliases;
     std::ostringstream modules;
     for (const auto& import : imports) {
-        fs::path relative(import.path);
-        if (relative.is_absolute() || !relative.extension().empty()) {
-            throw std::runtime_error("local module imports use relative names without extensions");
-        }
-        for (const auto& part : relative) {
-            if (part == "." || part == ".." || part.empty()) {
-                throw std::runtime_error("local module path may not contain '.' or '..'");
+        LoadedModule module;
+        if (import.standard) {
+            sys = sys || import.path == "sys";
+            module = load_module(fs::path(SUN_STDLIB_DIR) / (import.path + ".su"),
+                                 canonical.parent_path(), loading, cache);
+        } else {
+            fs::path relative(import.path);
+            if (relative.is_absolute() || !relative.extension().empty()) {
+                throw std::runtime_error("local module imports use relative names without extensions");
             }
-            for (const auto c : part.string()) {
-                if (!identifier_char(c)) {
-                    throw std::runtime_error("local module path must contain identifier names");
+            for (const auto& part : relative) {
+                if (part == "." || part == ".." || part.empty()) {
+                    throw std::runtime_error("local module path may not contain '.' or '..'");
+                }
+                for (const auto c : part.string()) {
+                    if (!identifier_char(c)) {
+                        throw std::runtime_error("local module path must contain identifier names");
+                    }
                 }
             }
+            module = load_module(canonical.parent_path() /
+                                     fs::path(relative.string() + ".su"),
+                                 canonical.parent_path(), loading, cache);
         }
-        auto module = load_module(canonical.parent_path() /
-                                      fs::path(relative.string() + ".su"),
-                                  canonical.parent_path(), loading, cache);
         if (!aliases.emplace(import.alias, module.exports).second) {
             throw std::runtime_error("duplicate local module alias '" + import.alias + "'");
         }
         math = math || module.math;
         memory = memory || module.memory;
         io = io || module.io;
+        sys = sys || module.sys;
         modules << module.source;
     }
 
@@ -374,6 +481,7 @@ std::string load_project_source(const std::filesystem::path& source_path) {
     if (math) result << "import math\n";
     if (memory) result << "import memory\n";
     if (io) result << "import io\n";
+    if (sys) result << "import sys\n";
     result << modules.str() << rewritten_main;
     return result.str();
 }

@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -17,6 +18,8 @@ struct Options {
     fs::path source;
     fs::path output;
     bool compile = false;
+    bool check = false;
+    bool output_explicit = false;
     bool compiler_explicit = false;
     std::string compiler = "g++";
 };
@@ -32,7 +35,8 @@ std::string shell_quote(const std::string& value) {
 }
 
 void print_usage(std::ostream& out) {
-    out << "Usage: sun <source.su> [-o <output.cpp>] [--compile] [--compiler <path>]\n";
+    out << "Usage: sun <source.su> [-o <output.cpp>] [--compile | --check] "
+           "[--compiler <path>]\n";
 }
 
 Options parse_options(int argc, char** argv) {
@@ -50,8 +54,11 @@ Options parse_options(int argc, char** argv) {
         if (argument == "-o") {
             if (++i >= argc) throw std::runtime_error("'-o' requires an output path");
             options.output = argv[i];
+            options.output_explicit = true;
         } else if (argument == "--compile") {
             options.compile = true;
+        } else if (argument == "--check") {
+            options.check = true;
         } else if (argument == "--compiler") {
             if (++i >= argc) throw std::runtime_error("'--compiler' requires a compiler path");
             options.compiler = argv[i];
@@ -66,6 +73,15 @@ Options parse_options(int argc, char** argv) {
     if (options.source.extension() != ".su") {
         throw std::runtime_error("source file must have the .su extension");
     }
+    if (options.check && options.compile) {
+        throw std::runtime_error("'--check' cannot be combined with '--compile'");
+    }
+    if (options.check && options.output_explicit) {
+        throw std::runtime_error("'-o' cannot be used with '--check'");
+    }
+    if (options.check && options.compiler_explicit) {
+        throw std::runtime_error("'--compiler' cannot be used with '--check'");
+    }
     if (options.output == "-") {
         if (options.compile) {
             throw std::runtime_error("cannot compile when C++ output is sent to stdout");
@@ -77,13 +93,85 @@ Options parse_options(int argc, char** argv) {
     return options;
 }
 
+std::string diagnostic_help(const sun::ParseError& error) {
+    if (!error.help.empty()) return error.help;
+    const std::string message = error.what();
+    if (message.find("missing 'end'") != std::string::npos) {
+        return "Add 'end' to close the function, condition, loop, or match block.";
+    }
+    if (message.find("requires 'import") != std::string::npos) {
+        return "Add the required import near the top of the source file.";
+    }
+    if (message.find("must have type") != std::string::npos ||
+        message.find("type mismatch") != std::string::npos ||
+        message.find("cannot initialize") != std::string::npos) {
+        return "Make the expression's type match the expected type; use number(value) only when an int should become a number.";
+    }
+    if (message.find("expected") != std::string::npos) {
+        return "Check the punctuation and delimiters around this expression.";
+    }
+    return {};
+}
+
+void print_parse_error(const sun::ParseError& error, const std::string& source,
+                       const fs::path& source_path) {
+    std::cerr << "error: " << error.what() << '\n';
+    std::istringstream lines(source);
+    std::string text;
+    bool displayed_source_line = false;
+    for (std::size_t number = 1; number <= error.line && std::getline(lines, text); ++number) {
+        if (number != error.line) continue;
+        const auto first = text.find_first_not_of(" \t\r");
+        auto column = first == std::string::npos ? text.size() : first;
+        std::size_t underline_length = 1;
+        const std::string message = error.what();
+        if (message.rfind("unknown ", 0) == 0) {
+            const auto quote = message.find('\'');
+            const auto end_quote = quote == std::string::npos
+                                       ? std::string::npos
+                                       : message.find('\'', quote + 1);
+            if (end_quote != std::string::npos) {
+                const auto subject = message.substr(quote + 1, end_quote - quote - 1);
+                const auto subject_column = text.find(subject);
+                if (!subject.empty() && subject_column != std::string::npos) {
+                    column = subject_column;
+                    underline_length = subject.size();
+                }
+            }
+        }
+        const auto width = std::to_string(number).size();
+        std::cerr << " --> " << source_path.string() << ':' << number << ':' << column + 1 << '\n'
+                  << "  " << std::string(width, ' ') << " |\n"
+                  << "  " << std::setw(static_cast<int>(width)) << number << " | " << text << '\n'
+                  << "  " << std::string(width, ' ') << " | "
+                  << std::string(column, ' ') << std::string(underline_length, '^') << '\n';
+        const auto help = diagnostic_help(error);
+        if (!help.empty()) std::cerr << "  = help: " << help << '\n';
+        displayed_source_line = true;
+    }
+    if (!displayed_source_line) {
+        const auto width = std::to_string(error.line).size();
+        std::cerr << " --> " << source_path.string() << ':' << error.line << ":1\n"
+                  << "  " << std::string(width, ' ') << " |\n"
+                  << "  " << std::setw(static_cast<int>(width)) << error.line << " | \n"
+                  << "  " << std::string(width, ' ') << " | ^\n";
+        const auto help = diagnostic_help(error);
+        if (!help.empty()) std::cerr << "  = help: " << help << '\n';
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    std::string source_text;
     try {
         const auto options = parse_options(argc, argv);
-        std::istringstream input(sun::load_project_source(options.source));
-        const auto generated = sun::transpile(sun::parse(input));
+        source_text = sun::load_project_source(options.source);
+        std::istringstream input(source_text);
+        const auto program = sun::parse(input);
+        if (options.check) return 0;
+
+        const auto generated = sun::transpile(program);
         if (options.output == "-") {
             std::cout << generated;
         } else {
@@ -115,7 +203,7 @@ int main(int argc, char** argv) {
         }
         return 0;
     } catch (const sun::ParseError& error) {
-        std::cerr << "sun: line " << error.line << ": error: " << error.what() << '\n';
+        print_parse_error(error, source_text, argv[1]);
     } catch (const std::exception& error) {
         std::cerr << "sun: error: " << error.what() << '\n';
         if (argc < 2) print_usage(std::cerr);

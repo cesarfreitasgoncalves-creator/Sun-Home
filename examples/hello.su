@@ -1,4 +1,4 @@
-func greet(name)
+def greet(name)
     print(f"Hello, {name}!")
     print("Seu nome e %v.", %v=name)
 end

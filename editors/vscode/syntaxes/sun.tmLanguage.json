@@ -1,0 +1,173 @@
+{
+  "scopeName": "source.sun",
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.sun",
+      "match": "#.*$"
+    },
+    {
+      "name": "meta.inline.cpp.sun",
+      "begin": "^\\s*(inline\\s+cpp:)\\s*$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.inline-cpp.sun"
+        }
+      },
+      "end": "^\\s*(endcpp)\\s*$",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.other.inline-cpp.sun"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.cpp"
+        }
+      ]
+    },
+    {
+      "name": "string.quoted.double.fstring.sun",
+      "begin": "f\"",
+      "end": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.sun"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.sun"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.sun",
+          "match": "\\\\."
+        },
+        {
+          "name": "meta.interpolation.sun",
+          "begin": "\\{(?=[^{}]*\\})",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.sun"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.sun"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.sun",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.sun"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.sun"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.sun",
+              "match": "\\\\."
+            },
+            {
+              "name": "constant.character.format-placeholder.sun",
+              "match": "%v|%%"
+            }
+          ]
+        },
+        {
+          "name": "constant.character.format-placeholder.sun",
+          "match": "%v|%%"
+        }
+      ]
+    },
+    {
+      "name": "constant.numeric.sun",
+      "match": "\\b(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?\\b"
+    },
+    {
+      "name": "constant.language.boolean.sun",
+      "match": "\\b(?:true|false)\\b"
+    },
+    {
+      "name": "constant.language.null.sun",
+      "match": "\\b(?:NaN|nan)\\b"
+    },
+    {
+      "name": "storage.type.sun",
+      "match": "\\b(?:string|str|number|int|bool|char|region|list|dict|tuple)\\b"
+    },
+    {
+      "name": "support.module.sun",
+      "match": "\\b(?:math|io|sys|memory)\\b(?=\\.)"
+    },
+    {
+      "name": "support.function.builtin.sun",
+      "match": "\\b(?:print|input|len|sum|all|any|min|max|round|abs|floor|ceil|trunc|istype|assert|range)\\b(?=\\s*\\()"
+    },
+    {
+      "name": "support.function.math.sun",
+      "match": "(?<=math\\.)(?:abs|acos|asin|atan|atan2|ceil|cos|exp|floor|fmod|hypot|log|log10|log2|pow|sin|sqrt|tan|trunc)\\b"
+    },
+    {
+      "name": "support.function.string.sun",
+      "match": "(?<=\\.)(?:upper|lower|trim|split|replace|contains|starts_with|ends_with)\\b(?=\\s*\\()"
+    },
+    {
+      "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.sun"
+        },
+        "2": {
+          "name": "entity.name.function.sun"
+        }
+      }
+    },
+    {
+      "match": "\\b(class|struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.sun"
+        },
+        "2": {
+          "name": "entity.name.type.sun"
+        }
+      }
+    },
+    {
+      "name": "keyword.control.sun",
+      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|catch|except|finally|export|let|const|raise|return|break|continue|import|end|and|or|not)\\b"
+    },
+    {
+      "name": "keyword.other.sun",
+      "match": "\\b(?:as|AnError|cppCatcher)\\b"
+    },
+    {
+      "name": "variable.parameter.sun",
+      "match": "(?<=\\*\\*)[A-Za-z_][A-Za-z0-9_]*|(?<=\\*)[A-Za-z_][A-Za-z0-9_]*"
+    },
+    {
+      "name": "keyword.operator.sun",
+      "match": "\\*\\*|==|!=|<=|>=|\\+|-|\\*|/|%|=|<|>|:"
+    },
+    {
+      "name": "entity.name.function.call.sun",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    }
+  ]
+}

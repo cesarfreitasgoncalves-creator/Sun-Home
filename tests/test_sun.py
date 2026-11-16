@@ -828,7 +828,7 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "9\ninvalid input\nbase error\n")
 
-    def test_raise_rejects_non_errors_and_unsupported_inheritance(self):
+    def test_raise_rejects_non_errors_and_invalid_inheritance_bases(self):
         not_error = self.invoke(
             "raise-non-error.su",
             "class Point\n"
@@ -842,14 +842,12 @@ class SunCompilerTests(unittest.TestCase):
 
         unsupported_base = self.invoke(
             "unsupported-base.su",
-            "class Parent\n"
-            "end\n"
-            "class Child(Parent)\n"
+            "class Child(Missing)\n"
             "end\n",
             "--check",
         )
         self.assertNotEqual(unsupported_base.returncode, 0)
-        self.assertIn("class inheritance currently supports only '(AnError)'",
+        self.assertIn("base 'Missing' must be a declared non-error class",
                       unsupported_base.stderr)
 
     def test_except_handlers_are_ordered_and_anerror_is_a_wildcard(self):
@@ -2041,6 +2039,142 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "2\nBlue\n5\n")
+
+    def test_classes_support_single_inheritance_overrides_and_base_init(self):
+        result = self.invoke(
+            "class-inheritance.su",
+            "class Animal\n"
+            "    name: string\n"
+            "    def init(name: string)\n"
+            "        self.name = name\n"
+            "    end\n"
+            "    def label(): string\n"
+            '        return "Animal: " + self.name\n'
+            "    end\n"
+            "    def sound(): string\n"
+            '        return "?"\n'
+            "    end\n"
+            "end\n"
+            "class Dog(Animal)\n"
+            "    age: int\n"
+            "    def init(name: string, age: int)\n"
+            "        super.init(name)\n"
+            "        self.age = age\n"
+            "    end\n"
+            "    def sound(): string\n"
+            '        return "woof"\n'
+            "    end\n"
+            "    def age_years(): int\n"
+            "        return self.age\n"
+            "    end\n"
+            "end\n"
+            "class Pet(Animal)\n"
+            "end\n"
+            "class Puppy(Pet)\n"
+            "    def init(name: string)\n"
+            "        super.init(name)\n"
+            "    end\n"
+            "end\n"
+            'let dog: Dog = Dog(name="Rex", age=int(4))\n'
+            'let pet: Pet = Pet("Milo")\n'
+            'let puppy: Puppy = Puppy("Pip")\n'
+            "print(dog.label())\n"
+            "print(dog.sound())\n"
+            "print(dog.age_years())\n"
+            "print(pet.label())\n"
+            "print(puppy.label())\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "class-inheritance")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "Animal: Rex\nwoof\n4\nAnimal: Milo\nAnimal: Pip\n",
+        )
+
+    def test_derived_classes_without_init_can_construct_inherited_fields(self):
+        result = self.invoke(
+            "class-inherited-fields.su",
+            "class Base\n"
+            "    id: int\n"
+            "end\n"
+            "class Child(Base)\n"
+            "    active: bool\n"
+            "end\n"
+            "let item: Child = Child(active=true, id=int(12))\n"
+            "print(item.id)\n"
+            "print(item.active)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "class-inherited-fields")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "12\ntrue\n")
+
+    def test_class_inheritance_rejects_invalid_order_and_overrides(self):
+        cases = [
+            (
+                "base-declared-later",
+                "class Child(Base)\nend\nclass Base\nend\n",
+                "base class 'Base' must be declared before derived classes",
+            ),
+            (
+                "multiple-bases",
+                "class A\nend\nclass B\nend\nclass C(A, B)\nend\n",
+                "classes support exactly one base class",
+            ),
+            (
+                "struct-base",
+                "struct Base\n    id: int\nend\nclass Child(Base)\nend\n",
+                "base 'Base' must be a declared non-error class",
+            ),
+            (
+                "mismatched-override",
+                "class Base\n"
+                "    def value(x: int): int\n"
+                "        return x\n"
+                "    end\n"
+                "end\n"
+                "class Child(Base)\n"
+                "    def value(x: number): int\n"
+                "        return int(x)\n"
+                "    end\n"
+                "end\n",
+                "override of 'value' must match the inherited signature",
+            ),
+            (
+                "base-init-not-first",
+                "class Base\n"
+                "    def init(value: int)\n"
+                "    end\n"
+                "end\n"
+                "class Child(Base)\n"
+                "    def init(value: int)\n"
+                "        self.value = value\n"
+                "        super.init(value)\n"
+                "    end\n"
+                "end\n",
+                "derived init must begin with super.init(...)",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
 
     def test_enum_rejects_unknown_variant(self):
         result = self.invoke(

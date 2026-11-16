@@ -216,6 +216,60 @@ bool is_tuple_scalar_type(Type type) {
            type == Type::character;
 }
 
+const Field* find_custom_field(const CustomTypes& types, const std::string& type_name,
+                              const std::string& field_name) {
+    const auto type = types.find(type_name);
+    if (type == types.end()) return nullptr;
+    const auto field = std::find_if(
+        type->second.fields.begin(), type->second.fields.end(),
+        [&](const Field& candidate) { return candidate.name == field_name; });
+    if (field != type->second.fields.end()) return &*field;
+    if (!type->second.base_type.empty()) {
+        return find_custom_field(types, type->second.base_type, field_name);
+    }
+    return nullptr;
+}
+
+std::vector<Field> custom_fields(const CustomTypes& types,
+                                const CustomTypeDefinition& type) {
+    std::vector<Field> fields;
+    if (!type.base_type.empty()) {
+        fields = custom_fields(types, types.at(type.base_type));
+    }
+    fields.insert(fields.end(), type.fields.begin(), type.fields.end());
+    return fields;
+}
+
+std::pair<std::string, const Function*> find_class_initializer(
+    const CustomTypes& types, const CustomTypeDefinition& type) {
+    const auto own = std::find_if(
+        type.methods.begin(), type.methods.end(),
+        [](const Function& method) { return method.name == "init"; });
+    if (own != type.methods.end()) return {type.name, &*own};
+    auto base_name = type.base_type;
+    while (!base_name.empty()) {
+        const auto& base = types.at(base_name);
+        const auto inherited = std::find_if(
+            base.methods.begin(), base.methods.end(),
+            [](const Function& method) { return method.name == "init"; });
+        if (inherited != base.methods.end()) return {base.name, &*inherited};
+        base_name = base.base_type;
+    }
+    return {{}, nullptr};
+}
+
+bool has_custom_method(const CustomTypes& types, const std::string& type_name,
+                       const std::string& method_name) {
+    const auto type = types.find(type_name);
+    if (type == types.end()) return false;
+    if (std::any_of(type->second.methods.begin(), type->second.methods.end(),
+                    [&](const Function& method) { return method.name == method_name; })) {
+        return true;
+    }
+    return !type->second.base_type.empty() &&
+           has_custom_method(types, type->second.base_type, method_name);
+}
+
 std::string scalar_type_name(Type type) {
     switch (type.kind) {
     case Type::Kind::string: return "string";
@@ -1529,10 +1583,8 @@ private:
                                     std::move(call_arguments)));
                 continue;
             }
-            const auto field = std::find_if(
-                type->second.fields.begin(), type->second.fields.end(),
-                [&](const Field& candidate) { return candidate.name == member; });
-            if (field == type->second.fields.end()) {
+            const auto* field = find_custom_field(custom_types_, value.type.name, member);
+            if (!field) {
                 throw ParseError(line_, "unknown field '" + member +
                                          "' on '" + value.type.name + "'");
             }
@@ -1553,6 +1605,8 @@ private:
                                        [](const Function& method) {
                                            return method.name == "init";
                                        });
+        const auto [initializer_owner, initializer] =
+            find_class_initializer(custom_types_, definition);
         if (definition.is_error) {
             std::vector<Expression> constructor_arguments;
             std::ostringstream construction;
@@ -1589,10 +1643,27 @@ private:
                                 "SunType_" + definition.name,
                                 std::move(constructor_arguments)));
         }
-        if (definition.is_class && init != definition.methods.end()) {
-            const auto signature = signatures_.find(definition.name + ".init");
-            const auto arguments = bind_call_arguments(definition.name, signature->second,
-                                                       supplied, line_);
+        if (definition.is_class &&
+            (initializer || !definition.base_type.empty())) {
+            std::vector<ExprValue> arguments;
+            if (initializer) {
+                const auto signature = signatures_.find(initializer_owner + ".init");
+                arguments = bind_call_arguments(definition.name, signature->second,
+                                                supplied, line_);
+            } else {
+                Signature field_signature;
+                for (const auto& field : custom_fields(custom_types_, definition)) {
+                    field_signature.parameters.push_back(field.type);
+                    field_signature.parameter_names.push_back(field.name);
+                    field_signature.variadic_positional.push_back(false);
+                    field_signature.variadic_keyword.push_back(false);
+                    field_signature.variadic_value_types.push_back(field.type);
+                    field_signature.default_values.push_back(std::nullopt);
+                    field_signature.default_expressions.push_back(std::nullopt);
+                }
+                arguments = bind_call_arguments(definition.name, field_signature,
+                                                supplied, line_);
+            }
             std::ostringstream call;
             call << "sun_make_" << definition.name << '(';
             for (std::size_t i = 0; i < arguments.size(); ++i) {
@@ -2434,6 +2505,7 @@ private:
         std::size_t end;
         std::string kind;
         std::string name;
+        std::string base_type;
         bool is_error = false;
     };
 
@@ -2448,16 +2520,18 @@ private:
             else continue;
             const auto declaration = trim(text.substr(kind.size()));
             std::string name = declaration;
+            std::string base_type;
             bool is_error = false;
             if (kind == "class" && declaration.find('(') != std::string::npos) {
                 const auto header = parse_call(declaration, lines_[i].number);
                 const auto bases = split_arguments(header.second, lines_[i].number);
-                if (bases.size() != 1 || bases.front() != "AnError") {
+                if (bases.size() != 1 || !is_identifier(bases.front())) {
                     throw ParseError(lines_[i].number,
-                                     "class inheritance currently supports only '(AnError)'");
+                                     "classes support exactly one base class");
                 }
                 name = header.first;
-                is_error = true;
+                base_type = bases.front();
+                is_error = base_type == "AnError";
             }
             if (!is_identifier(name)) {
                 throw ParseError(lines_[i].number, "expected " + kind + " name");
@@ -2485,13 +2559,36 @@ private:
             }
             const Type custom_type{Type::Kind::custom, name};
             types_.emplace(name, custom_type);
-            ranges.push_back({i, end, kind, name, is_error});
+            ranges.push_back({i, end, kind, name, base_type, is_error});
             i = end;
+        }
+
+        std::unordered_map<std::string, std::size_t> range_by_name;
+        for (std::size_t i = 0; i < ranges.size(); ++i) {
+            range_by_name.emplace(ranges[i].name, i);
+        }
+        for (std::size_t i = 0; i < ranges.size(); ++i) {
+            const auto& range = ranges[i];
+            if (range.base_type.empty() || range.base_type == "AnError") continue;
+            const auto base = range_by_name.find(range.base_type);
+            if (base == range_by_name.end() || ranges[base->second].kind != "class" ||
+                ranges[base->second].is_error) {
+                throw ParseError(lines_[range.start].number,
+                                 "base '" + range.base_type +
+                                     "' must be a declared non-error class");
+            }
+            if (base->second >= i) {
+                throw ParseError(lines_[range.start].number,
+                                 "base class '" + range.base_type +
+                                     "' must be declared before derived classes");
+            }
         }
 
         for (const auto& range : ranges) {
             CustomTypeDefinition definition;
             definition.name = range.name;
+            definition.base_type = range.base_type == "AnError"
+                                       ? std::string{} : range.base_type;
             definition.is_class = range.kind == "class";
             definition.is_enum = range.kind == "enum";
             definition.is_error = range.is_error;
@@ -2501,9 +2598,27 @@ private:
         for (const auto& range : ranges) {
             CustomTypeDefinition definition;
             definition.name = range.name;
+            definition.base_type = range.base_type == "AnError"
+                                       ? std::string{} : range.base_type;
             definition.is_class = range.kind == "class";
             definition.is_enum = range.kind == "enum";
             definition.is_error = range.is_error;
+            if (!definition.base_type.empty()) {
+                auto parent_name = definition.base_type;
+                while (!parent_name.empty()) {
+                    const auto& parent = custom_types_.at(parent_name);
+                    for (const auto& method : parent.methods) {
+                        if (method.name == "init") continue;
+                        const auto signature = signatures_.find(
+                            parent_name + "." + method.name);
+                        if (signature != signatures_.end()) {
+                            signatures_.emplace(range.name + "." + method.name,
+                                                signature->second);
+                        }
+                    }
+                    parent_name = parent.base_type;
+                }
+            }
             std::unordered_map<std::string, bool> seen_members;
             for (std::size_t i = range.start + 1; i < range.end; ++i) {
                 const auto& line = lines_[i];
@@ -2539,6 +2654,27 @@ private:
                         throw ParseError(line.number,
                                          "class method parameters cannot have defaults");
                     }
+                    if (!definition.base_type.empty() && method.name != "init" &&
+                        find_custom_field(custom_types_, definition.base_type, method.name)) {
+                        throw ParseError(line.number,
+                                         "method '" + method.name +
+                                             "' conflicts with an inherited field");
+                    }
+                    if (!definition.base_type.empty() && method.name != "init" &&
+                        signatures_.find(range.name + "." + method.name) !=
+                            signatures_.end()) {
+                        const auto& inherited = signatures_.at(range.name + "." + method.name);
+                        std::vector<Type> parameter_types;
+                        for (const auto& parameter : method.parameters) {
+                            parameter_types.push_back(parameter.type);
+                        }
+                        if (inherited.parameters != parameter_types ||
+                            inherited.return_type != method.return_type) {
+                            throw ParseError(line.number,
+                                             "override of '" + method.name +
+                                                 "' must match the inherited signature");
+                        }
+                    }
                     if (!seen_members.emplace(method.name, true).second) {
                         throw ParseError(line.number, "duplicate class member '" + method.name + "'");
                     }
@@ -2547,8 +2683,11 @@ private:
                         add_signature_parameter(signature, parameter);
                     }
                     signature.return_type = method.return_type;
-                    if (!signatures_.emplace(range.name + "." + method.name,
-                                             std::move(signature)).second) {
+                    if (method.name != "init" &&
+                        signatures_.find(range.name + "." + method.name) != signatures_.end()) {
+                        signatures_[range.name + "." + method.name] = std::move(signature);
+                    } else if (!signatures_.emplace(range.name + "." + method.name,
+                                                    std::move(signature)).second) {
                         throw ParseError(line.number, "duplicate class method '" + method.name + "'");
                     }
                     definition.methods.push_back(std::move(method));
@@ -2628,6 +2767,13 @@ private:
                     !seen_members.emplace(field_name, true).second) {
                     throw ParseError(line.number, "invalid or duplicate field '" + field_name + "'");
                 }
+                if (!definition.base_type.empty() &&
+                    (find_custom_field(custom_types_, definition.base_type, field_name) ||
+                     has_custom_method(custom_types_, definition.base_type, field_name))) {
+                    throw ParseError(line.number,
+                                     "field '" + field_name +
+                                         "' conflicts with an inherited member");
+                }
                 const auto field_type = parse_type(trim(line.text.substr(colon + 1)),
                                                    line.number, types_);
                 if (field_type.kind == Type::Kind::custom ||
@@ -2662,6 +2808,25 @@ private:
                     throw ParseError(lines_[range.start].number,
                                      "could not locate class method '" + method.name + "'");
                 }
+                const auto& method_definition = custom_types_.at(range.name);
+                if (method.name == "init" && !method_definition.base_type.empty()) {
+                    const auto& base = custom_types_.at(method_definition.base_type);
+                    const bool base_has_initializer =
+                        find_class_initializer(custom_types_, base).second != nullptr;
+                    if (base_has_initializer) {
+                        auto first_body_line = method_line + 1;
+                        while (first_body_line < range.end &&
+                               is_ignored(lines_[first_body_line])) {
+                            ++first_body_line;
+                        }
+                        if (first_body_line == range.end ||
+                            lines_[first_body_line].text.rfind("super.init(", 0) != 0) {
+                            throw ParseError(
+                                lines_[method_line].number,
+                                "derived init must begin with super.init(...)");
+                        }
+                    }
+                }
                 Symbols symbols;
                 symbols.emplace("self", Symbol{types_.at(range.name), "(*this)"});
                 for (const auto& parameter : method.parameters) {
@@ -2672,13 +2837,19 @@ private:
                 ++method_line;
                 const auto previous_return_type = active_return_type_;
                 const auto previous_function_state = inside_function_;
+                const auto previous_class_type = active_class_type_;
+                const auto previous_method_name = active_method_name_;
                 active_return_type_ = function.return_type;
                 inside_function_ = true;
+                active_class_type_ = range.name;
+                active_method_name_ = function.name;
                 bool definitely_returns = false;
                 function.body = parse_block(method_line, symbols, program.math_imported,
                                             &definitely_returns);
                 active_return_type_ = previous_return_type;
                 inside_function_ = previous_function_state;
+                active_class_type_ = previous_class_type;
+                active_method_name_ = previous_method_name;
                 if (method_line == range.end) {
                     throw ParseError(lines_[range.start].number,
                                      "class method '" + function.name + "' is missing 'end'");
@@ -4011,6 +4182,44 @@ private:
         return "sun_list_append(" + list->second.cpp_name + ", " + item + ");";
     }
 
+    std::string parse_super_initializer(const SourceLine& line, const std::string& text,
+                                        const Symbols& symbols, bool math_imported) const {
+        if (active_class_type_.empty() || active_method_name_ != "init") {
+            throw ParseError(line.number, "super.init(...) is only valid inside a class init method");
+        }
+        const auto& definition = custom_types_.at(active_class_type_);
+        if (definition.base_type.empty()) {
+            throw ParseError(line.number, "super.init(...) requires a base class");
+        }
+        const auto call = parse_call(text.substr(std::string("super.").size()), line.number);
+        if (call.first != "init") {
+            throw ParseError(line.number, "only super.init(...) is supported");
+        }
+        const auto& base = custom_types_.at(definition.base_type);
+        const auto [initializer_owner, initializer] =
+            find_class_initializer(custom_types_, base);
+        if (!initializer) {
+            throw ParseError(line.number, "base class '" + definition.base_type +
+                                             "' has no init method");
+        }
+        const auto signature = signatures_.find(initializer_owner + ".init");
+        if (signature == signatures_.end()) {
+            throw std::logic_error("base class initializer signature is missing");
+        }
+        const auto supplied = parse_call_arguments(
+            split_arguments(call.second, line.number), line.number, symbols, math_imported);
+        const auto arguments = bind_call_arguments("super.init", signature->second,
+                                                   supplied, line.number);
+        std::ostringstream code;
+        code << "SunType_" << initializer_owner << "::init(";
+        for (std::size_t i = 0; i < arguments.size(); ++i) {
+            if (i) code << ", ";
+            code << arguments[i].cpp;
+        }
+        code << ");";
+        return code.str();
+    }
+
     Statement parse_index_assignment(const SourceLine& line, const std::string& text,
                                      const Symbols& symbols, bool math_imported) const {
         const auto equals = find_assignment_operator(text);
@@ -4222,6 +4431,11 @@ private:
         if (text == "endcpp") {
             throw ParseError(line.number, "'endcpp' without an open inline C++ block");
         }
+        if (text.rfind("super.", 0) == 0) {
+            auto result = parse_super_initializer(line, text, symbols, math_imported);
+            ++index;
+            return result;
+        }
         if (starts_word(text, "if")) {
             auto result = parse_if(index, symbols, math_imported, definitely_returns);
             return result;
@@ -4351,6 +4565,8 @@ private:
     std::vector<Function> functions_;
     std::vector<std::vector<std::string>> local_function_scopes_;
     std::optional<Type> active_return_type_;
+    std::string active_class_type_;
+    std::string active_method_name_;
     bool inside_function_ = false;
     bool inside_finally_ = false;
     std::size_t next_loop_id_ = 0;

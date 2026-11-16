@@ -282,6 +282,7 @@ struct EnumVariant {
 
 struct CustomTypeDefinition {
     std::string name;
+    std::string base_type;
     bool is_class = false;
     bool is_enum = false;
     bool is_error = false;

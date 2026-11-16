@@ -49,9 +49,9 @@ em [HOWUSE.md](HOWUSE.md).
 - `import io` para leitura de texto/linhas, escrita, diretorios e metadados de
   arquivos.
 - `import sys` para argumentos, ambiente, diretorio atual, plataforma e saida.
-- Imports de modulos locais com alias, structs, enums e classes simples com
-  campos, metodos e `init`; `export def` controla a API publica de modulos, e
-  classes de erro podem herdar de `AnError`.
+- Imports de modulos locais com alias, structs, enums e classes com
+  campos, metodos, `init` e heranca simples; `export def` controla a API publica
+  de modulos, e classes de erro podem herdar de `AnError`.
 - Blocos de interoperabilidade `inline cpp:` ... `endcpp`.
 - Strings concatenadas com `+`, f-strings e operacoes de transformacao, busca,
   substituicao e divisao.
@@ -61,8 +61,8 @@ em [HOWUSE.md](HOWUSE.md).
 - `--check` para validar sintaxe e tipos sem gerar C++.
 
 Comentarios com `#` podem aparecer no fim de uma linha fora de strings. Sun
-ainda esta em prototipo; heranca entre classes comuns nao esta disponivel,
-exceto para classes de erro que herdam de `AnError`.
+ainda esta em prototipo; classes comuns suportam heranca simples sem conversao
+implicita para tipos base, e classes de erro herdam diretamente de `AnError`.
 
 `inline cpp` executa codigo C++ nativo sem isolamento ou validacao de seguranca.
 Use somente com codigo confiavel; nao e uma sandbox.

@@ -2399,11 +2399,20 @@ private:
             }
         }
         std::ostringstream code;
-        code << "{\n";
+        code << "try {\n    {\n";
         for (const auto& entry : symbols) {
-            code << "    auto& " << entry.first << " = " << entry.second.cpp_name << ";\n";
+            code << "        auto& " << entry.first << " = "
+                 << entry.second.cpp_name << ";\n";
         }
-        code << raw.str() << "\n}";
+        code << raw.str()
+             << "\n    }\n"
+                "} catch (const AnError&) {\n"
+                "    throw;\n"
+                "} catch (const std::exception& sun_cpp_error) {\n"
+                "    throw SunCppException(sun_cpp_error.what());\n"
+                "} catch (...) {\n"
+                "    throw SunCppException(\"unknown C++ exception in inline cpp\");\n"
+                "}";
         return code.str();
     }
 
@@ -2467,7 +2476,7 @@ private:
 
     bool is_terminator(const std::string& text) const {
         return text == "end" || starts_word(text, "elif") || starts_word(text, "else") ||
-               starts_word(text, "catch");
+               starts_word(text, "catch") || starts_word(text, "except");
     }
 
     void skip_ignored(std::size_t& index) const {
@@ -2487,6 +2496,11 @@ private:
             if (starts_word(lines_[index].text, "elif") ||
                 starts_word(lines_[index].text, "else")) {
                 throw ParseError(lines_[index].number, "unexpected branch without an 'if'");
+            }
+            if (starts_word(lines_[index].text, "catch") ||
+                starts_word(lines_[index].text, "except")) {
+                throw ParseError(lines_[index].number,
+                                 "unexpected error handler without a 'try'");
             }
             if (starts_word(lines_[index].text, "def")) {
                 auto function = parse_function_header(lines_[index]);
@@ -2957,40 +2971,116 @@ private:
         auto try_symbols = symbols;
         bool try_returns = false;
         const auto try_body = parse_block(index, try_symbols, math_imported, &try_returns);
-        if (index == lines_.size() || !starts_word(lines_[index].text, "catch")) {
-            throw ParseError(line.number, "try block must be followed by 'catch name:'");
+        std::vector<TryExceptClause> handlers;
+        std::set<std::string> caught_types;
+        bool caught_all_errors = false;
+        std::string wildcard_handler;
+        bool all_handlers_return = true;
+        while (index < lines_.size() &&
+               (starts_word(lines_[index].text, "catch") ||
+                starts_word(lines_[index].text, "except"))) {
+            const auto handler_line = lines_[index];
+            const bool legacy_catch = starts_word(handler_line.text, "catch");
+            const auto keyword_size = legacy_catch ? std::string("catch").size()
+                                                   : std::string("except").size();
+            auto header = trim(handler_line.text.substr(keyword_size));
+            if (header.size() < 2 || header.back() != ':') {
+                throw ParseError(handler_line.number,
+                                 legacy_catch ? "expected 'catch name:'"
+                                              : "expected 'except ErrorType [as name]:'");
+            }
+            header = trim(header.substr(0, header.size() - 1));
+
+            std::string error_type;
+            std::optional<std::string> name;
+            std::string cpp_error_type;
+            if (legacy_catch) {
+                if (!is_identifier(header)) {
+                    throw ParseError(handler_line.number,
+                                     "invalid catch variable '" + header + "'");
+                }
+                name = header;
+                if (caught_all_errors) {
+                    throw ParseError(handler_line.number,
+                                     "no handler may follow the '" + wildcard_handler +
+                                         "' wildcard");
+                }
+                error_type = "AnError";
+                cpp_error_type = "SunType_AnError";
+                caught_all_errors = true;
+                wildcard_handler = "catch";
+            } else {
+                const auto as_separator = header.find(" as ");
+                error_type = trim(header.substr(0, as_separator));
+                if (as_separator != std::string::npos) {
+                    name = trim(header.substr(as_separator + 4));
+                    if (!is_identifier(*name)) {
+                        throw ParseError(handler_line.number,
+                                         "invalid except variable '" + *name + "'");
+                    }
+                }
+                if (!is_identifier(error_type)) {
+                    throw ParseError(handler_line.number,
+                                     "invalid exception type '" + error_type + "'");
+                }
+                if (caught_all_errors) {
+                    throw ParseError(handler_line.number,
+                                     "no handler may follow the '" + wildcard_handler +
+                                         "' wildcard");
+                }
+                if (error_type == "cppCatcher") {
+                    cpp_error_type = "SunCppException";
+                } else {
+                    const auto definition = custom_types_.find(error_type);
+                    if (definition == custom_types_.end() || !definition->second.is_error) {
+                        throw ParseError(handler_line.number,
+                                         "except requires AnError, cppCatcher, or an AnError subclass");
+                    }
+                    cpp_error_type = "SunType_" + error_type;
+                }
+                if (error_type == "AnError") {
+                    caught_all_errors = true;
+                    wildcard_handler = "except AnError";
+                }
+            }
+
+            if (!caught_types.insert(error_type).second) {
+                throw ParseError(handler_line.number,
+                                 "duplicate handler for '" + error_type + "'");
+            }
+            if (name && symbols.find(*name) != symbols.end()) {
+                throw ParseError(handler_line.number, "except variable '" + *name +
+                                                     "' shadows a value in this scope");
+            }
+
+            const auto id = next_catch_id_++;
+            const auto cpp_name = "sun_caught_error_" + std::to_string(id);
+            std::optional<std::string> cpp_message_name;
+            auto handler_symbols = symbols;
+            if (name) {
+                cpp_message_name = "sun_catch_message_" + std::to_string(id);
+                handler_symbols.emplace(
+                    *name, Symbol{Type::string, *cpp_message_name});
+            }
+            ++index;
+            bool handler_returns = false;
+            auto body = parse_block(index, handler_symbols, math_imported,
+                                    &handler_returns);
+            all_handlers_return = all_handlers_return && handler_returns;
+            handlers.push_back({std::move(cpp_error_type), cpp_name,
+                                std::move(cpp_message_name), std::move(body)});
         }
-        const auto catch_line = lines_[index];
-        const auto catch_header = trim(catch_line.text.substr(5));
-        if (catch_header.size() < 2 || catch_header.back() != ':') {
-            throw ParseError(catch_line.number, "expected 'catch name:'");
+        if (handlers.empty()) {
+            throw ParseError(line.number,
+                             "try block must be followed by 'catch name:' or 'except ErrorType:'");
         }
-        const auto name = trim(catch_header.substr(0, catch_header.size() - 1));
-        if (!is_identifier(name)) {
-            throw ParseError(catch_line.number, "invalid catch variable '" + name + "'");
-        }
-        if (symbols.find(name) != symbols.end()) {
-            throw ParseError(catch_line.number, "catch variable '" + name +
-                                                "' shadows a value in this scope");
-        }
-        const auto id = next_catch_id_++;
-        const auto cpp_name = "sun_caught_error_" + std::to_string(id);
-        ++index;
-        auto catch_symbols = symbols;
-        catch_symbols.emplace(name, Symbol{Type::string, "sun_catch_message_" +
-                                                          std::to_string(id)});
-        bool catch_returns = false;
-        const auto catch_body = parse_block(index, catch_symbols, math_imported,
-                                            &catch_returns);
         if (index == lines_.size() || lines_[index].text != "end") {
             const auto error_line = lines_.empty() ? 1 : lines_.back().number + 1;
             throw ParseError(error_line, "try block is missing 'end'");
         }
         ++index;
-        if (definitely_returns) *definitely_returns = try_returns && catch_returns;
-        return Statement{TryCatchStatement{cpp_name, "sun_catch_message_" +
-                                                          std::to_string(id),
-                                            std::move(try_body), std::move(catch_body)},
+        if (definitely_returns) *definitely_returns = try_returns && all_handlers_return;
+        return Statement{TryCatchStatement{std::move(try_body), std::move(handlers)},
                          line.number};
     }
 

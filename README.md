@@ -31,8 +31,9 @@ em [HOWUSE.md](HOWUSE.md).
 - Tuplas heterogeneas, fixas e imutaveis com acesso por indice literal.
 - `match` para valores escalares e variantes de enum; enums podem carregar campos tipados.
 - Funcoes aninhadas com captura de variaveis externas por referencia.
-- `input(prompt, tipo)` para leitura tipada, `try`/`catch` e erros personalizados
-  com `AnError` e `raise`.
+- `input(prompt, tipo)`, `try`/`catch` legado e `except` tipado, com erros
+  personalizados baseados em `AnError`, `raise` e `cppCatcher` para excecoes
+  de blocos `inline cpp`.
 - Inteiros assinados de 64 bits com conversoes verificadas e `char` Unicode.
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.

@@ -556,6 +556,133 @@ class SunCompilerTests(unittest.TestCase):
         self.assertIn("class inheritance currently supports only '(AnError)'",
                       unsupported_base.stderr)
 
+    def test_except_handlers_are_ordered_and_anerror_is_a_wildcard(self):
+        result = self.invoke(
+            "except-wildcard.su",
+            "class ValidationError(AnError)\n"
+            "end\n"
+            "try:\n"
+            '    raise ValidationError("invalid input")\n'
+            "except ValidationError as message:\n"
+            '    print("specific: " + message)\n'
+            "except AnError as message:\n"
+            '    print("wildcard: " + message)\n'
+            "end\n"
+            "try:\n"
+            "    let value: int = int(1) / int(0)\n"
+            "except AnError as message:\n"
+            '    print("wildcard: " + message)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-wildcard")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "specific: invalid input\nwildcard: int division by zero\n",
+        )
+
+    def test_except_anerror_must_follow_specific_handlers(self):
+        result = self.invoke(
+            "except-after-wildcard.su",
+            "class ValidationError(AnError)\n"
+            "end\n"
+            "try:\n"
+            '    raise ValidationError("invalid")\n'
+            "except AnError:\n"
+            '    print("caught")\n'
+            "except ValidationError:\n"
+            '    print("unreachable")\n'
+            "end\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no handler may follow the 'except AnError' wildcard",
+                      result.stderr)
+
+    def test_except_anerror_does_not_catch_arbitrary_cpp_exceptions(self):
+        result = self.invoke(
+            "except-native-exception.su",
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw std::runtime_error("native failure");\n'
+            "    endcpp\n"
+            "except AnError:\n"
+            '    print("caught")\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-native-exception")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(executable.returncode, 0)
+        self.assertEqual(executable.stdout, "")
+        self.assertIn("native failure", executable.stderr)
+
+    def test_except_cppcatcher_catches_inline_cpp_exceptions_only(self):
+        result = self.invoke(
+            "except-cpp-catcher.su",
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw std::runtime_error("native failure");\n'
+            "    endcpp\n"
+            "except cppCatcher as error:\n"
+            '    print("caught: " + error)\n'
+            "except AnError:\n"
+            '    print("Sun error")\n'
+            "end\n"
+            "try:\n"
+            "    inline cpp:\n"
+            "        throw 42;\n"
+            "    endcpp\n"
+            "except cppCatcher as error:\n"
+            '    print("caught: " + error)\n'
+            "end\n"
+            "try:\n"
+            "    let value: int = int(1) / int(0)\n"
+            "except AnError as error:\n"
+            '    print("Sun: " + error)\n'
+            "end\n"
+            "try:\n"
+            "    inline cpp:\n"
+            '        throw SunRuntimeError("Sun error from inline");\n'
+            "    endcpp\n"
+            "except cppCatcher:\n"
+            '    print("native error")\n'
+            "except AnError as error:\n"
+            '    print("Sun: " + error)\n'
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "except-cpp-catcher")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "caught: native failure\n"
+            "caught: unknown C++ exception in inline cpp\n"
+            "Sun: int division by zero\n"
+            "Sun: Sun error from inline\n",
+        )
+
     def test_assert_checks_bool_and_throws_catchable_runtime_error(self):
         result = self.invoke(
             "assertion.su",

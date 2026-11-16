@@ -243,12 +243,16 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* attempt = std::get_if<TryCatchStatement>(&statement.node)) {
         out << prefix << "try {\n";
         emit_block(out, attempt->try_body, spaces + 4);
-        out << prefix << "} catch (const SunRuntimeError& "
-            << attempt->caught_error_name << ") {\n"
-            << std::string(spaces + 4, ' ') << "const std::string "
-            << attempt->catch_message_name << " = "
-            << attempt->caught_error_name << ".what();\n";
-        emit_block(out, attempt->catch_body, spaces + 4);
+        for (const auto& handler : attempt->handlers) {
+            out << prefix << "} catch (const " << handler.cpp_error_type << "& "
+                << handler.caught_error_name << ") {\n";
+            if (handler.message_name) {
+                out << std::string(spaces + 4, ' ') << "const std::string "
+                    << *handler.message_name << " = " << handler.caught_error_name
+                    << ".what();\n";
+            }
+            emit_block(out, handler.body, spaces + 4);
+        }
         out << prefix << "}\n";
     }
 }
@@ -277,14 +281,23 @@ std::string transpile(const Program& program) {
         out << "#include <filesystem>\n#include <fstream>\n#include <iterator>\n";
     }
     out << R"cpp(
-class SunRuntimeError : public std::runtime_error {
+class AnError : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
 
-class AnError : public SunRuntimeError {
+class SunRuntimeError : public AnError {
 public:
-    using SunRuntimeError::SunRuntimeError;
+    using AnError::AnError;
+};
+
+class SunCppException : public std::exception {
+public:
+    explicit SunCppException(std::string message) : message_(std::move(message)) {}
+    const char* what() const noexcept override { return message_.c_str(); }
+
+private:
+    std::string message_;
 };
 
 using SunType_AnError = AnError;
@@ -644,14 +657,14 @@ private:
             continue;
         }
         out << "\nstruct SunType_" << type.name;
-        if (type.is_error) out << " : public AnError";
+        if (type.is_error) out << " : public SunRuntimeError";
         out << " {\n";
         if (type.is_error) {
             const auto init = std::find_if(
                 type.methods.begin(), type.methods.end(),
                 [](const Function& method) { return method.name == "init"; });
             if (init == type.methods.end()) {
-                out << "    using AnError::AnError;\n";
+                out << "    using SunRuntimeError::SunRuntimeError;\n";
             } else {
                 out << "    SunType_" << type.name << '(';
                 for (std::size_t i = 0; i < init->parameters.size(); ++i) {
@@ -809,7 +822,7 @@ private:
             out << cpp_type(init->parameters[i].type) << " sun_arg_"
                 << init->parameters[i].name;
         }
-        out << ") : AnError(sun_arg_" << init->parameters.front().name << ") {\n"
+        out << ") : SunRuntimeError(sun_arg_" << init->parameters.front().name << ") {\n"
             << "    init(";
         for (std::size_t i = 0; i < init->parameters.size(); ++i) {
             if (i) out << ", ";

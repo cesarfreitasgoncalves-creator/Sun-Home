@@ -27,6 +27,7 @@ enum class Keyword {
     case_,
     try_,
     catch_,
+    except_,
     let_,
     return_,
     break_,
@@ -228,11 +229,16 @@ struct ForEachStatement {
     Block body;
 };
 
-struct TryCatchStatement {
+struct TryExceptClause {
+    std::string cpp_error_type;
     std::string caught_error_name;
-    std::string catch_message_name;
+    std::optional<std::string> message_name;
+    Block body;
+};
+
+struct TryCatchStatement {
     Block try_body;
-    Block catch_body;
+    std::vector<TryExceptClause> handlers;
 };
 
 struct Statement {

@@ -728,17 +728,47 @@ As mensagens sao texto simples, sem depender de cores, e os erros vao para
 ferramentas assistivas. As sugestoes de `help` aparecem junto com o diagnostico,
 sem exigir uma opcao ou comando separado.
 
-Use `try`/`catch nome:` para capturar erros de runtime produzidos por Sun
-(por exemplo, conversao ou indice invalido). O nome do `catch` recebe a
-mensagem como `string`:
+Use `try` com um ou mais `except Tipo [as nome]:` para tratar erros por tipo.
+`as nome` e opcional e, quando informado, recebe a mensagem como `string`.
+Os handlers sao testados na ordem em que aparecem; coloque os tipos mais
+especificos antes de `AnError`:
 
 ```sun
 try:
     let idade: int = input("Idade: ", int)
-catch erro:
-    print(f"Entrada invalida: {erro}")
+except AnError as mensagem:
+    print(f"Erro de runtime: {mensagem}")
 end
 ```
+
+As operacoes de runtime do Sun (como conversoes, indices invalidos e erros de
+entrada) sao capturadas por `AnError`. Erros fatais e excecoes arbitrarias de
+C++ nao pertencem a essa hierarquia e nao sao capturados por `except AnError`.
+`AnError` deve ser o ultimo handler, pois funciona como wildcard para os erros
+Sun que ainda nao foram capturados por handlers anteriores. Os handlers
+tipados aceitam `AnError` ou qualquer classe derivada dela.
+
+Para blocos `inline cpp` executados dentro de um `try`, use `except cppCatcher`
+para capturar excecoes C++ lancadas pelo proprio bloco. `as nome` e opcional;
+quando usado, a variavel recebe a mensagem da excecao:
+
+```sun
+try:
+    inline cpp:
+        throw std::runtime_error("falha nativa");
+    endcpp
+except cppCatcher as erro:
+    print(erro)
+except AnError:
+    print("Outro erro Sun")
+end
+```
+
+`cppCatcher` captura excecoes C++ padrao e excecoes lancadas com `throw` que
+nao derivam de `std::exception` (estas recebem uma mensagem generica). Ele nao
+captura falhas fatais do processo, como `abort`, falhas de memoria/segmentacao
+ou encerramento via `exit`. Excecoes C++ fora de blocos `inline cpp` nao sao
+convertidas para esse handler.
 
 Erros personalizados herdam da classe-base `AnError` e sao lancados com
 `raise`. O metodo `init`, quando declarado, precisa receber a mensagem como
@@ -755,17 +785,19 @@ end
 
 try:
     raise ValidationError("entrada invalida", int(12))
-catch erro:
-    print(erro)
+except ValidationError as mensagem:
+    print(mensagem)
+except AnError:
+    print("Outro erro")
 end
 ```
 
 `raise` aceita somente um valor de `AnError` ou de uma classe que herde dela.
-O `catch` atual captura qualquer erro de runtime Sun e disponibiliza sua
-mensagem como `string`.
+`catch nome:` continua disponivel para compatibilidade e captura erros de
+runtime Sun, disponibilizando a mensagem como `string`.
 
-`catch` nao captura erros de sintaxe/tipo da compilacao nem excecoes arbitrarias
-de C++ inline.
+Handlers `except` nao capturam erros de sintaxe/tipo da compilacao nem excecoes
+arbitrarias de C++ inline.
 
 Problemas comuns:
 

@@ -4,9 +4,13 @@
   "description": "Language support and file icons for Sun (.su) files.",
   "version": "0.1.0",
   "publisher": "sun-language",
+  "main": "./extension.js",
   "engines": {
     "vscode": "^1.85.0"
   },
+  "activationEvents": [
+    "onLanguage:sun"
+  ],
   "categories": [
     "Programming Languages",
     "Themes"
@@ -32,6 +36,24 @@
         "path": "./syntaxes/sun.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "sun",
+        "path": "./snippets/sun.json"
+      }
+    ],
+    "configuration": {
+      "title": "Sun",
+      "properties": {
+        "sun.format.indentSize": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of spaces used by the Sun formatter."
+        }
+      }
+    },
     "iconThemes": [
       {
         "id": "sun-file-icons",

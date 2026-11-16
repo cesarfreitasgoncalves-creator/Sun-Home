@@ -18,5 +18,9 @@
     ["[", "]"],
     ["(", ")"],
     ["\"", "\""]
-  ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(?:(?:def|class|struct|enum|if|while|for|match|try)\\b.*|inline\\s+cpp:)\\s*$|^\\s*(?:elif|else|except|finally|case)\\b.*:\\s*(?:#.*)?$",
+    "decreaseIndentPattern": "^\\s*(?:end(?:cpp)?|elif\\b|else\\b|except\\b|finally\\b|case\\b)"
+  }
 }

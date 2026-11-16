@@ -59,6 +59,8 @@ struct ExprValue {
 struct CallArgument {
     std::optional<std::string> name;
     ExprValue value;
+    bool unpack_positional = false;
+    bool unpack_keyword = false;
 };
 
 Expression make_expression(Expression::Kind kind, Type type, std::string value,
@@ -370,7 +372,10 @@ std::vector<ExprValue> bind_call_arguments(const std::string& name,
                     [](bool value) { return value; });
     const bool has_named = std::any_of(
         supplied.begin(), supplied.end(),
-        [](const CallArgument& argument) { return argument.name.has_value(); });
+        [](const CallArgument& argument) {
+            return argument.name.has_value() || argument.unpack_positional ||
+                   argument.unpack_keyword;
+        });
     if (!has_variadic && !has_named) {
         const auto required = static_cast<std::size_t>(std::count_if(
             signature.default_values.begin(), signature.default_values.end(),
@@ -395,6 +400,8 @@ std::vector<ExprValue> bind_call_arguments(const std::string& name,
     std::vector<std::optional<ExprValue>> bound(signature.parameters.size());
     std::vector<ExprValue> extra_positional;
     std::vector<std::pair<std::string, ExprValue>> extra_keyword;
+    std::optional<ExprValue> positional_unpack;
+    std::optional<ExprValue> keyword_unpack;
     std::size_t positional_index = 0;
     bool saw_keyword = false;
 
@@ -408,6 +415,64 @@ std::vector<ExprValue> bind_call_arguments(const std::string& name,
     };
 
     for (const auto& argument : supplied) {
+        if (argument.unpack_positional) {
+            if (saw_keyword) {
+                throw ParseError(line, "positional unpacking cannot follow named arguments");
+            }
+            const auto variadic = std::find(signature.variadic_positional.begin(),
+                                            signature.variadic_positional.end(), true);
+            if (variadic == signature.variadic_positional.end()) {
+                throw ParseError(line, "positional unpacking requires a *args parameter");
+            }
+            if (!is_list_type(argument.value.type)) {
+                throw ParseError(line, "positional unpacking requires a typed list");
+            }
+            const auto index = static_cast<std::size_t>(
+                std::distance(signature.variadic_positional.begin(), variadic));
+            if (list_item_type(argument.value.type) != signature.variadic_value_types[index]) {
+                throw ParseError(line, "unpacked list item type must be " +
+                                           scalar_type_name(
+                                               signature.variadic_value_types[index]));
+            }
+            if (positional_unpack) {
+                throw ParseError(line, "a call may use positional unpacking only once");
+            }
+            positional_unpack = argument.value;
+            continue;
+        }
+        if (argument.unpack_keyword) {
+            saw_keyword = true;
+            const auto variadic = std::find(signature.variadic_keyword.begin(),
+                                            signature.variadic_keyword.end(), true);
+            if (variadic == signature.variadic_keyword.end()) {
+                throw ParseError(line, "keyword unpacking requires a **kwargs parameter");
+            }
+            if (std::any_of(signature.variadic_keyword.begin(),
+                            signature.variadic_keyword.end(),
+                            [](bool is_variadic) { return !is_variadic; })) {
+                throw ParseError(line,
+                                 "**kwargs unpacking requires a function with only **kwargs");
+            }
+            if (!is_dictionary_type(argument.value.type)) {
+                throw ParseError(line, "keyword unpacking requires a typed dictionary");
+            }
+            const auto index = static_cast<std::size_t>(
+                std::distance(signature.variadic_keyword.begin(), variadic));
+            const auto separator = argument.value.type.name.find(',');
+            if (separator == std::string::npos ||
+                argument.value.type.name.substr(0, separator) != "string" ||
+                argument.value.type.name.substr(separator + 1) !=
+                    scalar_type_name(signature.variadic_value_types[index])) {
+                throw ParseError(line, "**kwargs requires dict[string, " +
+                                           scalar_type_name(
+                                               signature.variadic_value_types[index]) + "]");
+            }
+            if (keyword_unpack) {
+                throw ParseError(line, "a call may use keyword unpacking only once");
+            }
+            keyword_unpack = argument.value;
+            continue;
+        }
         if (!argument.name) {
             if (saw_keyword) {
                 throw ParseError(line, "positional arguments cannot follow named arguments");
@@ -460,6 +525,14 @@ std::vector<ExprValue> bind_call_arguments(const std::string& name,
         const auto& expected = signature.parameters[i];
         if (signature.variadic_positional[i]) {
             const auto item_type = signature.variadic_value_types[i];
+            if (positional_unpack) {
+                if (!extra_positional.empty()) {
+                    throw ParseError(line,
+                                     "cannot combine *args unpacking with extra positional values");
+                }
+                result.push_back(std::move(*positional_unpack));
+                continue;
+            }
             std::vector<Expression> items;
             std::ostringstream values;
             for (std::size_t item = 0; item < extra_positional.size(); ++item) {
@@ -483,6 +556,14 @@ std::vector<ExprValue> bind_call_arguments(const std::string& name,
         }
         if (signature.variadic_keyword[i]) {
             const auto value_type = signature.variadic_value_types[i];
+            if (keyword_unpack) {
+                if (!extra_keyword.empty()) {
+                    throw ParseError(line,
+                                     "cannot combine **kwargs unpacking with extra named values");
+                }
+                result.push_back(std::move(*keyword_unpack));
+                continue;
+            }
             std::vector<Expression> entries;
             std::ostringstream values;
             for (std::size_t item = 0; item < extra_keyword.size(); ++item) {
@@ -726,7 +807,17 @@ private:
         if (accept(")")) return arguments;
         while (true) {
             std::optional<std::string> name;
-            if (peek().kind == Token::Kind::identifier &&
+            bool unpack_positional = false;
+            bool unpack_keyword = false;
+            if (accept("**")) {
+                unpack_keyword = true;
+                saw_named = true;
+            } else if (accept("*")) {
+                if (saw_named) {
+                    throw ParseError(line_, "positional unpacking cannot follow named arguments");
+                }
+                unpack_positional = true;
+            } else if (peek().kind == Token::Kind::identifier &&
                 position_ + 1 < tokens_.size() &&
                 tokens_[position_ + 1].text == "=") {
                 name = take().text;
@@ -735,7 +826,8 @@ private:
             } else if (saw_named) {
                 throw ParseError(line_, "positional arguments cannot follow named arguments");
             }
-            arguments.push_back({std::move(name), parse_binary(1)});
+            arguments.push_back({std::move(name), parse_binary(1),
+                                 unpack_positional, unpack_keyword});
             if (!accept(",")) break;
             if (peek().text == ")") break;
         }
@@ -1063,7 +1155,9 @@ private:
             }
             if (name == "len" && accept("(")) return parse_len_call();
             if ((name == "sum" || name == "all" || name == "any" ||
-                 name == "min" || name == "max" || name == "round") &&
+                 name == "min" || name == "max" || name == "round" ||
+                 name == "abs" || name == "floor" || name == "ceil" ||
+                 name == "trunc") &&
                 signatures_.find(name) == signatures_.end() &&
                 accept("(")) {
                 return parse_builtin_call(name);
@@ -1671,13 +1765,18 @@ private:
                 throw ParseError(line_, "expected ')' after " + name + " arguments");
             }
         }
-        const auto expected = name == "round" || name == "sum" ||
-                                      name == "all" || name == "any"
+        const auto expected = name == "sum" || name == "all" || name == "any" ||
+                                      name == "round" || name == "abs" ||
+                                      name == "floor" || name == "ceil" ||
+                                      name == "trunc"
                                   ? 1U : 2U;
-        if (arguments.size() != expected) {
-            throw ParseError(line_, name + " expects " + std::to_string(expected) +
-                                        " argument(s), got " +
-                                        std::to_string(arguments.size()));
+        if (arguments.size() != expected &&
+            !(name == "round" && arguments.size() == 2)) {
+            const auto expectation = name == "round"
+                                         ? "round expects 1 or 2 argument(s), got "
+                                         : name + " expects " + std::to_string(expected) +
+                                               " argument(s), got ";
+            throw ParseError(line_, expectation + std::to_string(arguments.size()));
         }
 
         if (name == "sum") {
@@ -1707,14 +1806,37 @@ private:
         }
 
         if (!is_numeric(arguments[0].type) ||
-            (expected == 2 && !is_numeric(arguments[1].type))) {
+            (arguments.size() == 2 && !is_numeric(arguments[1].type))) {
             throw ParseError(line_, name + "() requires number or int arguments");
         }
 
         if (name == "round") {
+            if (arguments.size() == 2) {
+                if (arguments[1].type != Type::integer) {
+                    throw ParseError(line_, "round() precision must have type int");
+                }
+                return make_expr_value(
+                    Type::number,
+                    "sun_round_digits(" + as_number(arguments[0]) + ", " +
+                        arguments[1].cpp + ")",
+                    make_expression(
+                        Expression::Kind::call, Type::number, "sun_round_digits",
+                        {as_number_expression(arguments[0]), arguments[1].ast}));
+            }
             return make_expr_value(
                 Type::number, "std::round(" + as_number(arguments[0]) + ")",
                 make_expression(Expression::Kind::call, Type::number, "std::round",
+                                {as_number_expression(arguments[0])}));
+        }
+
+        if (name == "abs" || name == "floor" || name == "ceil" ||
+            name == "trunc") {
+            const auto helper = name == "abs" ? "std::fabs" :
+                                name == "floor" ? "std::floor" :
+                                name == "ceil" ? "std::ceil" : "std::trunc";
+            return make_expr_value(
+                Type::number, std::string(helper) + "(" + as_number(arguments[0]) + ")",
+                make_expression(Expression::Kind::call, Type::number, helper,
                                 {as_number_expression(arguments[0])}));
         }
 
@@ -2298,25 +2420,8 @@ public:
             const auto function = parse_function_header(line);
             auto& signature = signatures_.at(function.name);
             Symbols no_symbols;
-            for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-                const auto& parameter = function.parameters[i];
-                if (!parameter.default_value) continue;
-                const auto value = ExpressionParser(*parameter.default_value, line.number,
-                                                    no_symbols, result.math_imported,
-                                                    result.memory_imported, result.io_imported,
-                                                    signatures_, types_, custom_types_,
-                                                    false).parse();
-                if (!can_assign(parameter.type, value.type)) {
-                    throw ParseError(line.number, "default for parameter '" + parameter.name +
-                                                   "' must have type " +
-                                                   cpp_type(parameter.type));
-                }
-                signature.default_values[i] = converted_value(parameter.type, value.type,
-                                                              value.cpp);
-                signature.default_expressions[i] =
-                    converted_expression(parameter.type, value.type, value.ast);
-                if (value.type == Type::empty_list) signature.default_values[i] = "{}";
-            }
+            populate_signature_defaults(function, signature, no_symbols,
+                                        result.math_imported);
         }
         result.main_body = parse_main(index, result.math_imported, result.global_cpp);
         result.functions = std::move(functions_);
@@ -2881,14 +2986,6 @@ private:
             throw ParseError(line.number, "function '" + function.name +
                                              "' is already visible in this scope");
         }
-        if (std::any_of(function.parameters.begin(), function.parameters.end(),
-                        [](const Parameter& parameter) {
-                            return parameter.default_value.has_value();
-                        })) {
-            throw ParseError(line.number,
-                             "nested function parameters cannot have default values");
-        }
-
         const auto id = next_local_function_id_++;
         const auto cpp_name = "sun_local_function_" + std::to_string(id);
         Signature signature;
@@ -2896,6 +2993,8 @@ private:
             add_signature_parameter(signature, parameter);
         }
         signature.return_type = function.return_type;
+        Symbols no_symbols;
+        populate_signature_defaults(function, signature, no_symbols, math_imported);
         signature.cpp_name = cpp_name;
         signatures_.emplace(function.name, std::move(signature));
         local_function_scopes_.back().push_back(function.name);
@@ -2938,6 +3037,28 @@ private:
             line.number};
     }
 
+    void populate_signature_defaults(const Function& function, Signature& signature,
+                                     const Symbols& symbols, bool math_imported) const {
+        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
+            const auto& parameter = function.parameters[i];
+            if (!parameter.default_value) continue;
+            const auto value = ExpressionParser(
+                *parameter.default_value, function.line, symbols, math_imported,
+                memory_imported_, io_imported_, signatures_, types_, custom_types_,
+                false).parse();
+            if (!can_assign(parameter.type, value.type)) {
+                throw ParseError(function.line, "default for parameter '" + parameter.name +
+                                                   "' must have type " +
+                                                   cpp_type(parameter.type));
+            }
+            signature.default_values[i] = converted_value(parameter.type, value.type,
+                                                          value.cpp);
+            signature.default_expressions[i] =
+                converted_expression(parameter.type, value.type, value.ast);
+            if (value.type == Type::empty_list) signature.default_values[i] = "{}";
+        }
+    }
+
     ExprValue expression(const std::string& text, std::size_t line, const Symbols& symbols,
                          bool math_imported) const {
         return ExpressionParser(text, line, symbols, math_imported, memory_imported_, io_imported_,
@@ -2950,16 +3071,28 @@ private:
         std::vector<CallArgument> arguments;
         bool saw_named = false;
         for (const auto& source : sources) {
-            const auto equals = find_assignment_operator(source);
+            auto value_source = trim(source);
+            const auto equals = find_assignment_operator(value_source);
             std::optional<std::string> name;
-            std::string value_source = source;
-            if (equals != std::string::npos) {
-                const auto candidate = trim(source.substr(0, equals));
+            bool unpack_positional = false;
+            bool unpack_keyword = false;
+            if (value_source.rfind("**", 0) == 0) {
+                unpack_keyword = true;
+                saw_named = true;
+                value_source = trim(value_source.substr(2));
+            } else if (value_source.rfind("*", 0) == 0) {
+                if (saw_named) {
+                    throw ParseError(line, "positional unpacking cannot follow named arguments");
+                }
+                unpack_positional = true;
+                value_source = trim(value_source.substr(1));
+            } else if (equals != std::string::npos) {
+                const auto candidate = trim(value_source.substr(0, equals));
                 if (!is_identifier(candidate)) {
                     throw ParseError(line, "invalid named argument '" + candidate + "'");
                 }
                 name = candidate;
-                value_source = trim(source.substr(equals + 1));
+                value_source = trim(value_source.substr(equals + 1));
                 saw_named = true;
                 if (value_source.empty()) {
                     throw ParseError(line, "named argument '" + candidate +
@@ -2969,7 +3102,8 @@ private:
                 throw ParseError(line, "positional arguments cannot follow named arguments");
             }
             arguments.push_back({std::move(name),
-                                 expression(value_source, line, symbols, math_imported)});
+                                 expression(value_source, line, symbols, math_imported),
+                                 unpack_positional, unpack_keyword});
         }
         return arguments;
     }

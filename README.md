@@ -30,7 +30,8 @@ em [HOWUSE.md](HOWUSE.md).
   `clear`, indexacao, `len` e iteracao.
 - Tuplas heterogeneas, fixas e imutaveis com acesso por indice literal.
 - `match` para valores escalares e variantes de enum; enums podem carregar campos tipados.
-- Funcoes aninhadas com captura de variaveis externas por referencia.
+- Funcoes aninhadas com captura de variaveis externas por referencia e defaults
+  constantes nos parametros.
 - `input(prompt, tipo)`, `try`/`catch` legado e `except` tipado, com erros
   personalizados baseados em `AnError`, `raise` e `cppCatcher` para excecoes
   de blocos `inline cpp`; `finally` para executar limpeza ao sair do bloco.
@@ -38,8 +39,10 @@ em [HOWUSE.md](HOWUSE.md).
 - Funcoes com retornos tipados e atribuicao mutavel.
 - `break`/`continue`, `istype(valor, tipo)` e parametros com valores padrao.
 - Argumentos nomeados em funcoes/metodos Sun e construtores de tipos; parametros
-  tipados `*args`/`**kwargs` para coletar argumentos extras.
+  tipados `*args`/`**kwargs` para coletar argumentos extras, com desempacotamento
+  de colecoes tipadas em chamadas.
 - `sum`, `all`, `any`, `min`, `max` e `round` como funcoes integradas tipadas.
+- `abs`, `floor`, `ceil`, `trunc` e `round(valor, casas)` para operacoes numericas.
 - Condicoes `if`/`elif`/`else` e `import math` para funcoes matematicas.
 - `import memory` com regioes de bytes gerenciadas, limites de alocacao e
   verificacao de bounds para leitura e escrita.
@@ -69,7 +72,8 @@ O core esta dividido em lexer, parser, gerador C++ e CLI em `src/`. Veja
 
 ## Visual Studio Code
 
-Uma extensao basica para reconhecer arquivos `.su`, realcar a sintaxe e mostrar
-um icone Sun esta em [`editors/vscode`](editors/vscode). No VS Code, abra essa
-pasta com **Developer: Install Extension from Location...**. Para ver o icone
-dos arquivos `.su`, selecione **Sun File Icons** em **File Icon Theme**.
+Uma extensao para arquivos `.su`, com realce de sintaxe, snippets, sugestoes de
+completude, formatacao basica e icone Sun, esta em
+[`editors/vscode`](editors/vscode). No VS Code, abra essa pasta com
+**Developer: Install Extension from Location...**. Para ver o icone dos arquivos
+`.su`, selecione **Sun File Icons** em **File Icon Theme**.

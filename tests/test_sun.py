@@ -389,6 +389,87 @@ class SunCompilerTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected_error, result.stderr)
 
+    def test_variadic_parameters_accept_typed_collection_unpacking(self):
+        result = self.invoke(
+            "variadic-unpacking.su",
+            "def collect(prefix: int, *values: int)\n"
+            "    print(prefix)\n"
+            "    print(values)\n"
+            "end\n"
+            "def options(**values: string)\n"
+            "    print(values)\n"
+            "end\n"
+            "let numbers: list[int] = [int(2), int(3)]\n"
+            'let settings: dict[string, string] = {"mode": "fast", "label": "ok"}\n'
+            "collect(int(1), *numbers)\n"
+            "options(**settings)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "variadic-unpacking")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "1\n[2, 3]\n{label: ok, mode: fast}\n")
+
+    def test_variadic_unpacking_rejects_mismatched_collections_and_signatures(self):
+        cases = [
+            (
+                "wrong-positional-item-type",
+                "def collect(*values: int)\nend\n"
+                'let words: list[string] = ["one"]\n'
+                "collect(*words)\n",
+                "unpacked list item type must be int",
+            ),
+            (
+                "keyword-unpack-with-regular-parameters",
+                "def collect(required: int, **values: string)\nend\n"
+                'let options: dict[string, string] = {"mode": "fast"}\n'
+                "collect(**options)\n",
+                "**kwargs unpacking requires a function with only **kwargs",
+            ),
+            (
+                "keyword-unpack-wrong-value-type",
+                "def collect(**values: string)\nend\n"
+                'let options: dict[string, int] = {"count": int(3)}\n'
+                "collect(**options)\n",
+                "**kwargs requires dict[string, string]",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name + ".su", source, "--check")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_nested_function_parameters_accept_constant_defaults(self):
+        result = self.invoke(
+            "nested-defaults.su",
+            "def outer(base: int): int\n"
+            "    def add(value: int = int(4)): int\n"
+            "        return base + value\n"
+            "    end\n"
+            "    print(add())\n"
+            "    return add(value=int(3))\n"
+            "end\n"
+            "print(outer(int(2)))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "nested-defaults")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "6\n5\n")
+
     def test_typed_variadic_arguments_collect_positional_and_named_values(self):
         result = self.invoke(
             "variadic-arguments.su",
@@ -1411,6 +1492,37 @@ class SunCompilerTests(unittest.TestCase):
             executable.stdout,
             "5\n4\n0\n3\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\n-3\n4.5\n3\n-3\nnan\n",
         )
+
+    def test_float_builtins_and_decimal_rounding(self):
+        result = self.invoke(
+            "float-operations.su",
+            "print(abs(-2.75))\n"
+            "print(floor(2.75))\n"
+            "print(ceil(-2.75))\n"
+            "print(trunc(-2.75))\n"
+            "print(round(3.14159, int(2)))\n"
+            "print(round(149, int(-1)))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "float-operations")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "2.75\n2\n-2\n-2\n3.14\n150\n")
+
+    def test_round_precision_requires_an_integer(self):
+        result = self.invoke(
+            "round-invalid-precision.su",
+            "print(round(3.14159, 2.0))\n",
+            "--check",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("round() precision must have type int", result.stderr)
 
     def test_builtins_reject_incompatible_collection_types(self):
         result = self.invoke(

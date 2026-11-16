@@ -324,6 +324,15 @@ public:
     using AnError::AnError;
 };
 
+double sun_round_digits(double value, std::int64_t digits) {
+    if (digits > 308) return value;
+    if (digits < -308) {
+        return std::isfinite(value) ? std::copysign(0.0, value) : value;
+    }
+    const double factor = std::pow(10.0, static_cast<double>(digits));
+    return std::round(value * factor) / factor;
+}
+
 std::string sun_string_upper(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });

@@ -135,7 +135,8 @@ std::vector<Token> tokenize(const std::string& source, std::size_t line) {
         }
         if (i + 1 < source.size()) {
             const auto pair = source.substr(i, 2);
-            if (pair == "==" || pair == "!=" || pair == "<=" || pair == ">=") {
+            if (pair == "==" || pair == "!=" || pair == "<=" || pair == ">=" ||
+                pair == "**") {
                 tokens.push_back({Token::Kind::symbol, pair});
                 i += 2;
                 continue;

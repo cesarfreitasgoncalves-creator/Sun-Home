@@ -124,7 +124,12 @@ Uma funcao tambem pode receber argumentos extras com parametros tipados:
 `*values: int` coleta os posicionais restantes em `list[int]`;
 `**options: string` coleta nomes extras em `dict[string, string]`. Os tipos
 dos valores extras sao escalares e explicitos. Desempacotamento na chamada
-(`func(*items, **options)`) ainda nao e suportado:
+aceita uma lista tipada em `*values` (`func(*items)`) ou um dicionario de
+chaves string em `**options` (`func(**options)`). O desempacotamento de
+`**kwargs` requer que a funcao tenha somente esse parametro variadico; nao se
+pode combinar um dicionario desempacotado com argumentos nomeados explicitos.
+Para `*args`, os argumentos fixos devem vir antes da lista, sem outros valores
+posicionais variadicos na mesma chamada:
 
 ```sun
 def report(*values: int, **options: string)
@@ -333,8 +338,12 @@ quando todos os itens sao verdadeiros (inclusive para lista vazia), enquanto
 `any(lista_bool)` retorna `true` quando pelo menos um item e verdadeiro.
 `min(a, b)` e `max(a, b)` comparam numeros; argumentos mistos `int`/`number`
 resultam em `number`, e valores `NaN` fazem o resultado ser `NaN`.
-`round(valor)` arredonda para o inteiro mais proximo, retornando `number`; empates
-como `2.5` e `-2.5` arredondam para longe de zero.
+`round(valor)` arredonda para o inteiro mais proximo, retornando `number`; com
+`round(valor, casas)` arredonda para o numero de casas decimais indicado por um
+`int` (casas negativas arredondam para dezenas, centenas etc.). Empates como
+`2.5` e `-2.5` arredondam para longe de zero. `abs`, `floor`, `ceil` e `trunc`
+aceitam `number` ou `int` e retornam `number`; essas operacoes nao exigem
+`import math`.
 
 ### Dicionarios
 
@@ -468,8 +477,9 @@ end
 print(executar())
 ```
 
-Funcoes aninhadas aceitam parametros tipados e retorno tipado, inclusive
-recursao. Parametros com valores padrao ainda nao sao aceitos nelas.
+Funcoes aninhadas aceitam parametros tipados, retorno tipado e parametros com
+valores padrao constantes, inclusive recursao. Como nos defaults de funcoes de
+nivel superior, os valores padrao nao podem chamar funcoes.
 
 `istype(valor, tipo)` compara o tipo estatico de um valor com os tipos
 escalares `string`, `number`, `bool`, `int` e `char`, ou com as categorias

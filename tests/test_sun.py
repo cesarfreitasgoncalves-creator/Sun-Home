@@ -297,7 +297,7 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         generated = (WORK / "greeting.cpp").read_text(encoding="utf-8")
         self.assertIn("void sun_fn_greet(std::string sun_arg_name)", generated)
-        self.assertIn('std::string("Hello, ")', generated)
+        self.assertIn('std::string("Hello, ", 7)', generated)
         self.assertIn("sun_arg_name", generated)
 
         executable = subprocess.run(
@@ -552,6 +552,33 @@ class SunCompilerTests(unittest.TestCase):
             "true\ntrue\ntrue\n",
         )
 
+    def test_string_count_counts_non_overlapping_matches_and_rejects_empty_search(self):
+        result = self.invoke(
+            "string-count.su",
+            'print("aaaa".count("aa"))\n'
+            'print("banana".count("na"))\n'
+            'print("banana".count("xyz"))\n'
+            "try:\n"
+            '    print("abc".count(""))\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "string-count")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "2\n2\n0\nstring.count search text cannot be empty\n",
+        )
+
     def test_string_split_and_replace_reject_empty_search_values_at_runtime(self):
         for operation, expression, expected_error in [
             ("split", '"a".split("")', "string.split separator cannot be empty"),
@@ -592,7 +619,9 @@ class SunCompilerTests(unittest.TestCase):
             '    print(f"count={count + int(1)}, double={double(2.5)}, item={items[0]}")\n'
             '    print(f"brace={char(\\"}\\")}")\n'
             'end\n'
-            'greet("Sun")\n',
+            'const constant_label: string = f"answer={int(3) + int(1)}"\n'
+            'greet("Sun")\n'
+            'print(constant_label)\n',
             "--compile",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -606,7 +635,8 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(
             executable.stdout,
-            "Hello, Sun! {welcome} again\ncount=4, double=5, item=7\nbrace=}\n",
+            "Hello, Sun! {welcome} again\ncount=4, double=5, item=7\n"
+            "brace=}\nanswer=4\n",
         )
 
     def test_f_string_reports_errors_in_embedded_expressions(self):
@@ -762,6 +792,56 @@ class SunCompilerTests(unittest.TestCase):
         )
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "0\n0\n0\n0\n3\n5\n2\n3\n2\n")
+
+    def test_math_factorial_accepts_general_numbers_and_reports_undefined_results(self):
+        result = self.invoke(
+            "math-factorial.su",
+            "import math\n"
+            "print(math.factorial(0))\n"
+            "print(math.factorial(1))\n"
+            "print(math.factorial(5))\n"
+            "print(math.factorial(10))\n"
+            "let fact36: number = math.factorial(36)\n"
+            "print(fact36 / math.factorial(35))\n"
+            "print(math.factorial(2.5) > 3.3)\n"
+            "print(math.fatorial(36) / math.fatorial(35))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "math-factorial")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "1\n1\n120\n3.6288e+06\n36\ntrue\n36\n",
+        )
+
+        for value in ("-1", "171", "1e308"):
+            with self.subTest(value=value):
+                invalid = self.invoke(
+                    "math-factorial-invalid.su",
+                    "import math\n"
+                    f"print(math.factorial({value}))\n",
+                    "--compile",
+                )
+                self.assertEqual(invalid.returncode, 0, invalid.stderr)
+                failed = subprocess.run(
+                    [str(WORK / "math-factorial-invalid")],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(
+                    "math.factorial is undefined at negative integers or outside the number range",
+                    failed.stderr,
+                )
 
     def test_constant_expressions_are_folded_in_generated_cpp(self):
         result = self.invoke(
@@ -1167,6 +1247,35 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(
             executable.stdout,
             "".join(f"{message}\n" for _, message in cases),
+        )
+
+    def test_int_conversion_accepts_signed_boundaries_in_constant_and_runtime_paths(self):
+        result = self.invoke(
+            "integer-conversion-boundaries.su",
+            "def convert(value: number): int\n"
+            "    return int(value)\n"
+            "end\n"
+            "print(int(-9223372036854775808.0))\n"
+            "print(int(9223372036854774784.0))\n"
+            "print(convert(-9223372036854775808.0))\n"
+            "print(convert(9223372036854774784.0))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "integer-conversion-boundaries")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "-9223372036854775808\n"
+            "9223372036854774784\n"
+            "-9223372036854775808\n"
+            "9223372036854774784\n",
         )
 
     def test_numeric_precedence_fractional_division_and_nested_conditions(self):
@@ -1614,6 +1723,114 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "size=4\n65\n66\ntrue\nfalse\n")
 
+    def test_memory_fill_and_copy_support_overlapping_regions(self):
+        result = self.invoke(
+            "memory-copy-fill.su",
+            "import memory\n"
+            "let source: region = memory.alloc(4)\n"
+            "memory.fill(source, 46)\n"
+            "memory.write_u8(source, 0, 65)\n"
+            "memory.write_u8(source, 1, 66)\n"
+            "memory.write_u8(source, 2, 67)\n"
+            "memory.copy(source, 1, source, 0, 3)\n"
+            "let destination: region = memory.alloc(5)\n"
+            "memory.fill(destination, 46)\n"
+            "memory.copy(destination, 1, source, 1, 3)\n"
+            "memory.copy(destination, 5, source, 4, 0)\n"
+            "for index in range(0, 5):\n"
+            "    print(memory.read_u8(destination, index))\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "memory-copy-fill")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "46\n65\n66\n67\n46\n")
+
+    def test_memory_multibyte_integers_use_explicit_endianness(self):
+        result = self.invoke(
+            "memory-multibyte.su",
+            "import memory\n"
+            "let buffer: region = memory.alloc(12)\n"
+            'memory.write_u16(buffer, 0, int(4660), "little")\n'
+            'memory.write_u16(buffer, 2, int(4660), "big")\n'
+            'memory.write_u32(buffer, 4, int(305419896), "little")\n'
+            'memory.write_u32(buffer, 8, int(305419896), "big")\n'
+            'let little16: int = memory.read_u16(buffer, 0, "little")\n'
+            'let big16: int = memory.read_u16(buffer, 2, "big")\n'
+            'let swapped16: int = memory.read_u16(buffer, 0, "big")\n'
+            'let little32: int = memory.read_u32(buffer, 4, "little")\n'
+            'let big32: int = memory.read_u32(buffer, 8, "big")\n'
+            'let swapped32: int = memory.read_u32(buffer, 4, "big")\n'
+            'print(little16)\n'
+            'print(big16)\n'
+            'print(swapped16)\n'
+            'print(little32)\n'
+            'print(big32)\n'
+            'print(swapped32)\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "memory-multibyte")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "4660\n4660\n13330\n305419896\n305419896\n2018915346\n",
+        )
+
+    def test_memory_opaque_pointers_allocate_release_and_interoperate(self):
+        result = self.invoke(
+            "memory-pointer.su",
+            "import memory\n"
+            "def allocate(size: int): ptr\n"
+            "    return memory.alloc_ptr(size)\n"
+            "end\n"
+            "let empty: ptr = memory.alloc_ptr(0)\n"
+            "print(memory.ptr_is_null(empty))\n"
+            "print(memory.ptr_size(empty))\n"
+            "memory.free_ptr(empty)\n"
+            "let pointer: ptr = allocate(int(4))\n"
+            "let alias: ptr = pointer\n"
+            "print(memory.ptr_is_null(pointer))\n"
+            "print(memory.ptr_size(pointer))\n"
+            "print(istype(pointer, ptr))\n"
+            "def inspect(pointer: ptr)\n"
+            "    inline cpp:\n"
+            "        auto* bytes = static_cast<unsigned char*>(pointer.get());\n"
+            "        bytes[0] = 65;\n"
+            "        std::cout << static_cast<unsigned int>(bytes[0]) << '\\n';\n"
+            "    endcpp\n"
+            "end\n"
+            "inspect(pointer)\n"
+            "memory.free_ptr(alias)\n"
+            "print(memory.ptr_is_null(pointer))\n"
+            "print(memory.ptr_size(alias))\n"
+            "memory.free_ptr(pointer)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "memory-pointer")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "true\n0\nfalse\n4\ntrue\n65\ntrue\n0\n")
+
     def test_io_reads_writes_appends_and_checks_file_existence(self):
         target = WORK / "io-output.txt"
         result = self.invoke(
@@ -1639,6 +1856,135 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertEqual(executable.stdout, "true\nfalse\nHello Sun\n")
         self.assertEqual(target.read_text(encoding="utf-8"), "Hello Sun")
+
+    def test_bytes_mutate_convert_iterate_and_round_trip_binary_io(self):
+        target = WORK / "bytes-output.bin"
+        result = self.invoke(
+            "bytes.su",
+            "import io\n"
+            "import memory\n"
+            f'let path: string = "{target}"\n'
+            "let data: bytes = bytes.from_list([int(0), int(65), int(255)])\n"
+            "let empty: bytes = bytes.from_list([])\n"
+            "data[1] = int(66)\n"
+            "data.append(10)\n"
+            "print(len(data))\n"
+            "print(len(empty))\n"
+            "print(data.contains(255))\n"
+            "let from_string: bytes = bytes.from_string(bytes.to_string(data))\n"
+            "let buffer: region = bytes.to_region(data)\n"
+            "let from_region: bytes = bytes.from_region(buffer)\n"
+            "let as_list: list[int] = bytes.to_list(data)\n"
+            "print(from_string == data)\n"
+            "print(from_region == data)\n"
+            "print(as_list == bytes.to_list(from_region))\n"
+            "print(istype(data, bytes))\n"
+            "io.write_bytes(path, data)\n"
+            "let loaded: bytes = io.read_bytes(path)\n"
+            "for value in loaded:\n"
+            "    print(value)\n"
+            "end\n"
+            "loaded.clear()\n"
+            "print(len(loaded))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "bytes")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "4\n0\ntrue\ntrue\ntrue\ntrue\ntrue\n0\n66\n255\n10\n0\n",
+        )
+        self.assertEqual(target.read_bytes(), bytes([0, 66, 255, 10]))
+
+    def test_bytes_regions_and_custom_values_have_readable_string_forms(self):
+        result = self.invoke(
+            "value-formatting.su",
+            "import memory\n"
+            "struct Point\n"
+            "    x: int\n"
+            "    y: int\n"
+            "end\n"
+            "class NamedPoint\n"
+            "    name: string\n"
+            "    values: list[int]\n"
+            "    def init(name: string)\n"
+            "        self.name = name\n"
+            "        self.values = [int(3), int(4)]\n"
+            "    end\n"
+            "end\n"
+            "class LabeledPoint(NamedPoint)\n"
+            "    label: string\n"
+            "end\n"
+            "let empty: bytes = bytes.from_list([])\n"
+            "let data: bytes = bytes.from_list([int(0), int(65), int(255)])\n"
+            "let region: region = memory.alloc(0)\n"
+            "let point: Point = Point(int(2), int(5))\n"
+            'let named: LabeledPoint = LabeledPoint("origin")\n'
+            'named.label = "start"\n'
+            "print(empty)\n"
+            "print(data)\n"
+            'print(f"bytes={data}; empty={empty}")\n'
+            'print("formatted %v | %v | %v", %v=data, %v=region, %v=point)\n'
+            "print(region)\n"
+            "print(f\"{region}\")\n"
+            "print(point)\n"
+            "print(f\"{named}\")\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "value-formatting")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "[]\n[0, 65, 255]\n"
+            "bytes=[0, 65, 255]; empty=[]\n"
+            "formatted [0, 65, 255] | region(size=0) | Point{x=2, y=5}\n"
+            "region(size=0)\nregion(size=0)\n"
+            "Point{x=2, y=5}\n"
+            "LabeledPoint{name=origin, values=[3, 4], label=start}\n",
+        )
+
+    def test_bytes_reject_invalid_values_and_indexes_at_runtime(self):
+        cases = [
+            (
+                "bytes-invalid-value.su",
+                "let data: bytes = bytes.from_list([int(1)])\n"
+                "data[0] = 256\n",
+                "byte value must be an integer from 0 to 255",
+            ),
+            (
+                "bytes-invalid-index.su",
+                "let data: bytes = bytes.from_list([int(1)])\n"
+                "print(data[1])\n",
+                "bytes index out of bounds",
+            ),
+        ]
+        for source_name, source, expected_error in cases:
+            with self.subTest(source=source_name):
+                result = self.invoke(source_name, source, "--compile")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                executable = subprocess.run(
+                    [str(WORK / source_name[:-3])],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(executable.returncode, 0)
+                self.assertIn(expected_error, executable.stderr)
 
     def test_io_lines_directories_file_size_and_remove(self):
         directory = WORK / "io-extra-dir"
@@ -1672,6 +2018,50 @@ class SunCompilerTests(unittest.TestCase):
             "true\ntrue\n13\n[first, second]\ntrue\nfalse\ntrue\n",
         )
 
+    def test_io_createdir_exist_modes_and_recursive_creation(self):
+        directory = WORK / "createdir-root" / "nested"
+        file_path = directory / "existing.txt"
+        result = self.invoke(
+            "io-createdir.su",
+            "import io\n"
+            f'let directory: string = "{directory}"\n'
+            f'let file_path: string = "{file_path}"\n'
+            "print(io.createdir(directory))\n"
+            'print(io.createdir(directory, exist="ok"))\n'
+            "try:\n"
+            '    let denied: bool = io.createdir(directory, exist="no")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            'io.write_text(file_path, "file")\n'
+            "try:\n"
+            '    let not_directory: bool = io.createdir(file_path, exist="ok")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "try:\n"
+            '    let invalid: bool = io.createdir(directory, exist="maybe")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "print(io.is_directory(directory))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-createdir")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout.splitlines()[0:2], ["true", "false"])
+        self.assertIn("io.createdir directory already exists", executable.stdout)
+        self.assertIn("io.createdir path exists and is not a directory", executable.stdout)
+        self.assertIn("io.createdir exist must be 'ok' or 'no'", executable.stdout)
+        self.assertTrue(executable.stdout.endswith("true\n"))
+
     def test_io_requires_import_and_reports_read_errors(self):
         missing_import = self.invoke(
             "io-missing-import.su",
@@ -1701,22 +2091,287 @@ class SunCompilerTests(unittest.TestCase):
         self.assertEqual(executable.returncode, 0, executable.stderr)
         self.assertIn("io.read_text could not open file", executable.stdout)
 
-    def test_memory_requires_import_and_rejects_regions_as_text(self):
+    def test_io_open_with_close_binary_and_partial_line_write(self):
+        target = WORK / "io-open.txt"
+        result = self.invoke(
+            "io-open.su",
+            "import io\n"
+            f'let path: string = "{target}"\n'
+            "with open(path, \"w\") as output:\n"
+            '    io.write(output, "first\\nsecond\\n")\n'
+            "end\n"
+            "let handle: int = io.open(path, \"pw\")\n"
+            'io.pw(handle, int(2), "updated")\n'
+            "io.close(handle)\n"
+            "def read_file(path: string): string\n"
+            "    with open(path, \"rb\") as input_file:\n"
+            "        return io.read(input_file)\n"
+            "    end\n"
+            "end\n"
+            "print(read_file(path))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-open")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "first\nupdated\n\n")
+        self.assertEqual(target.read_bytes(), b"first\nupdated\n")
+
+    def test_io_open_append_mode_preserves_and_creates_file(self):
+        target = WORK / "io-append.txt"
+        result = self.invoke(
+            "io-append.su",
+            "import io\n"
+            f'let path: string = "{target}"\n'
+            "with open(path, \"a\") as output:\n"
+            '    io.write(output, "first\\n")\n'
+            "end\n"
+            "let handle: int = open(path, \"a\")\n"
+            'write(handle, "second\\n")\n'
+            "close(handle)\n"
+            "print(io.read_text(path))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "io-append")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "first\nsecond\n\n")
+        self.assertEqual(target.read_bytes(), b"first\nsecond\n")
+
+    def test_json_loads_dumps_nested_access_and_assignment(self):
+        result = self.invoke(
+            "json.su",
+            "import json\n"
+            'let data: json = json.loads("{\\"profile\\":{\\"name\\":\\"Ada\\"},\\"items\\":[1,true,null]}")\n'
+            'let fixed: json = json.loads("{\\"value\\":3}")\n'
+            'print(fixed["value"].as_int())\n'
+            'print(data["profile"]["name"].as_string())\n'
+            'print(data["items"][0].as_int())\n'
+            'print(data["items"][1].as_bool())\n'
+            'print(data["profile"].contains("name"))\n'
+            'print(data["profile"].contains("missing"))\n'
+            'data["profile"]["name"] = "Grace"\n'
+            'data["items"][0] = int(2)\n'
+            'let appended: int = data["items"].append("tail")\n'
+            'data["items"].append(data["profile"])\n'
+            "print(appended)\n"
+            "print(json.dumps(data))\n"
+            'let labels: dict[string, string] = {"name": "Ada"}\n'
+            "print(json.dumps(labels))\n"
+            "let values: list[int] = [int(1), int(2)]\n"
+            "print(json.dumps(values))\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "json")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            '3\nAda\n1\ntrue\ntrue\nfalse\n4\n'
+            '{"items":[2,true,null,"tail",{"name":"Grace"}],"profile":{"name":"Grace"}}\n'
+            '{"name":"Ada"}\n[1,2]\n',
+        )
+
+    def test_json_mutators_reject_wrong_container(self):
+        result = self.invoke(
+            "json-mutator-types.su",
+            "import json\n"
+            'let object: json = json.loads("{}")\n'
+            'let array: json = json.loads("[]")\n'
+            "try:\n"
+            "    object.append(1)\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "try:\n"
+            '    print(array.contains("key"))\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "json-mutator-types")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "JSON value is not an array\nJSON value is not an object\n",
+        )
+
+    def test_json_integer_boundaries_preserve_large_integer_values(self):
+        result = self.invoke(
+            "json-integer-boundaries.su",
+            "import json\n"
+            'print(json.loads("-9223372036854775808").as_int())\n'
+            'print(json.loads("9223372036854774784").as_int())\n'
+            'print(json.loads("[42]")[0].as_int())\n'
+            'print(json.loads("1.2e1").as_int())\n'
+            'print(json.loads("1.0") == json.loads("1.00"))\n'
+            'print(json.loads("1.0") != json.loads("2.0"))\n'
+            'let below: json = json.loads("-9223372036854775809")\n'
+            'let above: json = json.loads("9223372036854775808")\n'
+            'let fractional: json = json.loads("-9223372036854775808.1")\n'
+            "print(json.dumps(below))\n"
+            "print(json.dumps(above))\n"
+            "try:\n"
+            "    print(below.as_int())\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "try:\n"
+            "    print(above.as_int())\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "try:\n"
+            "    print(fractional.as_int())\n"
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n"
+            "try:\n"
+            '    let out_of_range: json = json.loads("1e400")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "json-integer-boundaries")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(
+            executable.stdout,
+            "-9223372036854775808\n"
+            "9223372036854774784\n"
+            "42\n"
+            "12\n"
+            "true\n"
+            "true\n"
+            "-9223372036854775809\n"
+            "9223372036854775808\n"
+            "json value is not an in-range integer\n"
+            "json value is not an in-range integer\n"
+            "json value is not an in-range integer\n"
+            "json.loads number is out of range at byte 5\n",
+        )
+
+    def test_json_requires_import_and_reports_invalid_json(self):
+        missing_import = self.invoke(
+            "json-missing-import.su",
+            'let value: json = json.loads("null")\n',
+        )
+        self.assertNotEqual(missing_import.returncode, 0)
+        self.assertIn("the json type requires 'import json'", missing_import.stderr)
+
+        result = self.invoke(
+            "json-invalid.su",
+            "import json\n"
+            'try:\n'
+            '    let value: json = json.loads("{invalid}")\n'
+            "catch error:\n"
+            "    print(error)\n"
+            "end\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "json-invalid")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertIn("json.loads", executable.stdout)
+
+    def test_local_modules_can_import_stdlib_json(self):
+        helper = WORK / "json_reader.su"
+        helper.write_text(
+            "import json\n"
+            "export def read_value(): json\n"
+            '    return json.loads("{\\"value\\":7}")\n'
+            "end\n",
+            encoding="utf-8",
+        )
+        result = self.invoke(
+            "json-local.su",
+            "import local/json_reader as reader\n"
+            "let value: json = reader.read_value()\n"
+            'print(value["value"].as_int())\n',
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "json-local")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "7\n")
+
+    def test_memory_requires_import_and_formats_regions_as_text(self):
         missing_import = self.invoke(
             "memory-missing-import.su",
             "let size: number = memory.size(1)\n",
         )
         self.assertNotEqual(missing_import.returncode, 0)
         self.assertIn("memory functions require 'import memory'", missing_import.stderr)
+        missing_pointer_import = self.invoke(
+            "pointer-missing-import.su",
+            "let pointer: ptr = memory.alloc_ptr(4)\n",
+        )
+        self.assertNotEqual(missing_pointer_import.returncode, 0)
+        self.assertIn("the ptr type requires 'import memory'",
+                      missing_pointer_import.stderr)
 
         print_region = self.invoke(
             "memory-print-region.su",
             "import memory\n"
             "let buffer: region = memory.alloc(1)\n"
             "print(buffer)\n",
+            "--compile",
         )
-        self.assertNotEqual(print_region.returncode, 0)
-        self.assertIn("memory regions cannot be printed directly", print_region.stderr)
+        self.assertEqual(print_region.returncode, 0, print_region.stderr)
+        executable = subprocess.run(
+            [str(WORK / "memory-print-region")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "region(size=1)\n")
 
     def test_memory_runtime_checks_allocation_offsets_and_byte_values(self):
         cases = [
@@ -1735,10 +2390,58 @@ class SunCompilerTests(unittest.TestCase):
                 "memory.write_u8 value must be an integer from 0 to 255",
             ),
             (
+                "memory-fill-byte-value.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(1)\n"
+                "memory.fill(buffer, 256)\n",
+                "memory.fill value must be an integer from 0 to 255",
+            ),
+            (
+                "memory-u16-value.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(2)\n"
+                'memory.write_u16(buffer, 0, 65536, "little")\n',
+                "memory.write_u16 value must be an integer from 0 to 65535",
+            ),
+            (
+                "memory-u32-value.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(4)\n"
+                'memory.write_u32(buffer, 0, 4294967296, "little")\n',
+                "memory.write_u32 value must be an integer from 0 to 4294967295",
+            ),
+            (
+                "memory-u32-endian.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(4)\n"
+                'memory.write_u32(buffer, 0, 1, "middle")\n',
+                "memory.write_u32 endian must be 'little' or 'big'",
+            ),
+            (
+                "memory-u32-bounds.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(3)\n"
+                'print(memory.read_u32(buffer, 0, "big"))\n',
+                "memory range out of bounds",
+            ),
+            (
+                "memory-copy-bounds.su",
+                "import memory\n"
+                "let buffer: region = memory.alloc(1)\n"
+                "memory.copy(buffer, 0, buffer, 0, 2)\n",
+                "memory range out of bounds",
+            ),
+            (
                 "memory-allocation-limit.su",
                 "import memory\n"
                 "let buffer: region = memory.alloc(67108865)\n",
                 "memory.alloc size must be an integer from 0 to 67108864",
+            ),
+            (
+                "memory-pointer-allocation-limit.su",
+                "import memory\n"
+                "let pointer: ptr = memory.alloc_ptr(67108865)\n",
+                "memory.alloc_ptr size must be an integer from 0 to 67108864",
             ),
         ]
         for source_name, source, expected_error in cases:
@@ -2545,11 +3248,32 @@ class SunCompilerTests(unittest.TestCase):
                       result.stderr)
         self.assertIn("= help: Check the function declaration", result.stderr)
 
-    def test_rejects_nul_in_string_literal(self):
-        result = self.invoke("nul-string.su", 'print("before\x00after")\n')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("error: NUL byte is not allowed in string literal", result.stderr)
-        self.assertFalse((WORK / "nul-string.cpp").exists())
+    def test_string_nul_escape_and_raw_nul_boundary(self):
+        result = self.invoke(
+            "nul-string.su",
+            'let value: string = "before\\0after"\n'
+            "let digit: string = \"A\\01\"\n"
+            "print(len(value))\n"
+            "print(value)\n"
+            "print(len(digit))\n"
+            "print(digit)\n",
+            "--compile",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        executable = subprocess.run(
+            [str(WORK / "nul-string")],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(executable.returncode, 0, executable.stderr)
+        self.assertEqual(executable.stdout, "12\nbefore\x00after\n3\nA\x001\n")
+
+        raw_nul = self.invoke("raw-nul-string.su", 'print("before\x00after")\n')
+        self.assertNotEqual(raw_nul.returncode, 0)
+        self.assertIn("error: NUL byte is not allowed in string literal", raw_nul.stderr)
+        self.assertFalse((WORK / "raw-nul-string.cpp").exists())
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 #include "compiler.hpp"
+#include "expression_codegen.hpp"
 #include "stdlib_io.hpp"
+#include "stdlib_json.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -32,79 +34,6 @@ std::string cpp_string(const std::string& value) {
     return result.str();
 }
 
-std::string emit_expression(const Expression& expression) {
-    const auto child = [&](std::size_t index) {
-        return emit_expression(expression.children.at(index));
-    };
-    const auto arguments = [&](std::size_t start) {
-        std::ostringstream result;
-        for (std::size_t i = start; i < expression.children.size(); ++i) {
-            if (i != start) result << ", ";
-            result << emit_expression(expression.children[i]);
-        }
-        return result.str();
-    };
-    switch (expression.kind) {
-    case Expression::Kind::literal:
-        if (expression.type == Type::integer) {
-            const auto min = std::numeric_limits<std::int64_t>::min();
-            if (expression.value == std::to_string(min)) {
-                return "std::numeric_limits<std::int64_t>::min()";
-            }
-            return "std::int64_t{" + expression.value + "}";
-        }
-        return expression.value;
-    case Expression::Kind::string_literal:
-        return "std::string(" + cpp_string(expression.value) + ")";
-    case Expression::Kind::variable: return expression.value;
-    case Expression::Kind::unary:
-        if (expression.value == "sun_int_neg") {
-            return "sun_int_neg(" + child(0) + ")";
-        }
-        return "(" + expression.value + "(" + child(0) + "))";
-    case Expression::Kind::binary:
-        return "((" + child(0) + ") " + expression.value + " (" + child(1) + "))";
-    case Expression::Kind::call:
-        return expression.value + "(" + arguments(0) + ")";
-    case Expression::Kind::member:
-        return "(" + child(0) + ")." + expression.value;
-    case Expression::Kind::member_call:
-        return "(" + child(0) + ")." + expression.value + "(" + arguments(1) + ")";
-    case Expression::Kind::list:
-    case Expression::Kind::aggregate: {
-        std::ostringstream result;
-        if (expression.kind == Expression::Kind::list) {
-            result << "std::vector<" << expression.value << ">{";
-        } else {
-            result << expression.value << '{';
-        }
-        result << arguments(0) << '}';
-        return result.str();
-    }
-    case Expression::Kind::dictionary: {
-        const auto separator = expression.value.find('|');
-        if (separator == std::string::npos) {
-            throw std::logic_error("dictionary expression is missing its type");
-        }
-        std::ostringstream result;
-        result << "std::map<" << expression.value.substr(0, separator) << ", "
-               << expression.value.substr(separator + 1) << ">{";
-        for (std::size_t i = 0; i < expression.children.size(); i += 2) {
-            if (i) result << ", ";
-            result << '{' << emit_expression(expression.children[i]) << ", "
-                   << emit_expression(expression.children[i + 1]) << '}';
-        }
-        result << '}';
-        return result.str();
-    }
-    case Expression::Kind::cast:
-        return "static_cast<" + expression.value + ">(" + child(0) + ")";
-    case Expression::Kind::empty_list: return "{}";
-    case Expression::Kind::empty_dictionary: return "{}";
-    }
-    throw std::logic_error("invalid expression node");
-}
-
 void emit_block(std::ostream& out, const Block& statements, std::size_t spaces);
 
 void emit_raw(std::ostream& out, const std::string& code, std::size_t spaces) {
@@ -121,6 +50,63 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     const std::string prefix(spaces, ' ');
     if (const auto* raw = std::get_if<RawStatement>(&statement.node)) {
         emit_raw(out, raw->cpp, spaces);
+    } else if (const auto* declaration =
+                   std::get_if<VariableDeclarationStatement>(&statement.node)) {
+        out << prefix << (declaration->is_const ? "const " : "")
+            << cpp_type(declaration->type) << ' ' << declaration->cpp_name << " = "
+            << emit_expression(declaration->initializer) << ";\n";
+    } else if (const auto* assignment =
+                   std::get_if<AssignmentStatement>(&statement.node)) {
+        out << prefix << assignment->cpp_name << " = "
+            << emit_expression(assignment->value) << ";\n";
+    } else if (const auto* returned = std::get_if<ReturnStatement>(&statement.node)) {
+        out << prefix << "return";
+        if (returned->value) out << ' ' << emit_expression(*returned->value);
+        out << ";\n";
+    } else if (const auto* call = std::get_if<CallStatement>(&statement.node)) {
+        out << prefix << call->callee << '(';
+        for (std::size_t i = 0; i < call->arguments.size(); ++i) {
+            if (i) out << ", ";
+            out << emit_expression(call->arguments[i]);
+        }
+        out << ");\n";
+    } else if (const auto* call =
+                   std::get_if<MemberCallStatement>(&statement.node)) {
+        out << prefix << '(' << emit_expression(call->receiver) << ")."
+            << call->method << '(';
+        for (std::size_t i = 0; i < call->arguments.size(); ++i) {
+            if (i) out << ", ";
+            out << emit_expression(call->arguments[i]);
+        }
+        out << ");\n";
+    } else if (const auto* assignment =
+                   std::get_if<IndexedAssignmentStatement>(&statement.node)) {
+        if (assignment->kind == IndexedAssignmentStatement::Kind::list) {
+            out << prefix << emit_expression(assignment->object) << " = "
+                << emit_expression(assignment->value) << ";\n";
+        } else if (assignment->kind ==
+                   IndexedAssignmentStatement::Kind::dictionary) {
+            out << prefix << emit_expression(assignment->object) << '['
+                << emit_expression(assignment->key) << "] = "
+                << emit_expression(assignment->value) << ";\n";
+        } else if (assignment->kind == IndexedAssignmentStatement::Kind::json) {
+            out << prefix << "sun_json_set(" << emit_expression(assignment->object)
+                << ", " << emit_expression(assignment->key) << ", sun_json_from("
+                << emit_expression(assignment->value) << "));\n";
+        } else {
+            out << prefix << "sun_bytes_set(" << emit_expression(assignment->object)
+                << ", " << emit_expression(assignment->key) << ", "
+                << emit_expression(assignment->value) << ");\n";
+        }
+    } else if (const auto* assignment =
+                   std::get_if<MemberAssignmentStatement>(&statement.node)) {
+        out << prefix << emit_expression(assignment->target) << " = "
+            << emit_expression(assignment->value) << ";\n";
+    } else if (const auto* control =
+                   std::get_if<LoopControlStatement>(&statement.node)) {
+        out << prefix
+            << (control->kind == LoopControlStatement::Kind::break_ ? "break;\n"
+                                                                    : "continue;\n");
     } else if (const auto* print = std::get_if<PrintStatement>(&statement.node)) {
         out << prefix << "std::cout << sun_to_string(" << emit_expression(print->value)
             << ") << '\\n';\n";
@@ -143,7 +129,7 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
             const auto& branch = conditional->branches[i];
             if (i == 0) out << prefix << "if (";
             else out << "else if (";
-            out << branch.condition << ") {\n";
+            out << emit_expression(branch.condition) << ") {\n";
             emit_block(out, branch.body, spaces + 4);
             out << prefix << '}';
             if (i + 1 < conditional->branches.size() || conditional->else_body) out << ' ';
@@ -210,18 +196,18 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
         emit_block(out, local_function->body, spaces + 4);
         out << prefix << "};\n";
     } else if (const auto* loop = std::get_if<WhileStatement>(&statement.node)) {
-        out << prefix << "while (" << loop->condition << ") {\n";
+        out << prefix << "while (" << emit_expression(loop->condition) << ") {\n";
         emit_block(out, loop->body, spaces + 4);
         out << prefix << "}\n";
     } else if (const auto* loop = std::get_if<RangeForStatement>(&statement.node)) {
         const auto inner = std::string(spaces + 4, ' ');
         out << prefix << "{\n"
             << inner << "const double " << loop->start_name << " = "
-            << loop->start_value << ";\n"
+            << emit_expression(loop->start_value) << ";\n"
             << inner << "const double " << loop->stop_name << " = "
-            << loop->stop_value << ";\n"
+            << emit_expression(loop->stop_value) << ";\n"
             << inner << "const double " << loop->step_name << " = "
-            << loop->step_value << ";\n"
+            << emit_expression(loop->step_value) << ";\n"
             << inner << "if (" << loop->step_name
             << " == 0.0) throw SunRuntimeError(\"range step cannot be zero\");\n"
             << inner << "for (double " << loop->variable_name << " = "
@@ -235,14 +221,25 @@ void emit_statement(std::ostream& out, const Statement& statement, std::size_t s
     } else if (const auto* loop = std::get_if<ForEachStatement>(&statement.node)) {
         if (loop->dictionary) {
             out << prefix << "for (const auto& " << loop->entry_name << " : "
-                << loop->collection << ") {\n"
+                << emit_expression(loop->collection) << ") {\n"
                 << std::string(spaces + 4, ' ') << "auto " << loop->variable_name
                 << " = " << loop->entry_name << ".first;\n";
         } else {
             out << prefix << "for (auto " << loop->variable_name << " : "
-                << loop->collection << ") {\n";
+                << emit_expression(loop->collection) << ") {\n";
         }
         emit_block(out, loop->body, spaces + 4);
+        out << prefix << "}\n";
+    } else if (const auto* opened = std::get_if<WithOpenStatement>(&statement.node)) {
+        out << prefix << "{\n"
+            << std::string(spaces + 4, ' ') << "SunFileGuard "
+            << opened->guard_name << "(sun_io_open("
+            << emit_expression(opened->path) << ", "
+            << emit_expression(opened->mode) << "));\n"
+            << std::string(spaces + 4, ' ') << "const std::int64_t "
+            << opened->handle_name << " = " << opened->guard_name
+            << ".handle();\n";
+        emit_block(out, opened->body, spaces + 4);
         out << prefix << "}\n";
     } else if (const auto* attempt = std::get_if<TryCatchStatement>(&statement.node)) {
         if (attempt->finally_body) {
@@ -347,13 +344,14 @@ std::pair<std::string, const Function*> class_initializer(
 
 std::string transpile(const Program& program) {
     std::ostringstream out;
-    out << "#include <algorithm>\n#include <cctype>\n#include <cmath>\n#include <cstdint>\n#include <exception>\n#include <iostream>\n#include <limits>\n"
+    out << "#include <algorithm>\n#include <cctype>\n#include <cmath>\n#include <cstdint>\n#include <cstdlib>\n#include <exception>\n#include <iostream>\n#include <limits>\n"
            "#include <map>\n#include <memory>\n#include <sstream>\n#include <stdexcept>\n"
            "#include <functional>\n#include <string>\n#include <type_traits>\n#include <utility>\n"
            "#include <tuple>\n#include <variant>\n#include <vector>\n";
     if (program.io_imported) {
         out << "#include <filesystem>\n#include <fstream>\n#include <iterator>\n";
     }
+    if (program.json_imported) out << "#include <charconv>\n#include <iomanip>\n";
     out << R"cpp(
 class SunFinallyGuard {
 public:
@@ -392,6 +390,18 @@ double sun_round_digits(double value, std::int64_t digits) {
     }
     const double factor = std::pow(10.0, static_cast<double>(digits));
     return std::round(value * factor) / factor;
+}
+
+double sun_math_factorial(double value) {
+    if (!std::isfinite(value)) {
+        throw SunRuntimeError("math.factorial expects a finite number");
+    }
+    const auto result = std::tgamma(value + 1.0);
+    if (!std::isfinite(result)) {
+        throw SunRuntimeError(
+            "math.factorial is undefined at negative integers or outside the number range");
+    }
+    return result;
 }
 
 std::string sun_string_upper(std::string value) {
@@ -450,6 +460,20 @@ std::string sun_string_replace(const std::string& value, const std::string& old_
 
 bool sun_string_contains(const std::string& value, const std::string& part) {
     return value.find(part) != std::string::npos;
+}
+
+std::int64_t sun_string_count(const std::string& value, const std::string& part) {
+    if (part.empty()) throw SunRuntimeError("string.count search text cannot be empty");
+    std::int64_t count = 0;
+    for (std::size_t position = 0;
+         (position = value.find(part, position)) != std::string::npos;
+         position += part.size()) {
+        if (count == std::numeric_limits<std::int64_t>::max()) {
+            throw SunRuntimeError("string.count result exceeds int range");
+        }
+        ++count;
+    }
+    return count;
 }
 
 bool sun_string_starts_with(const std::string& value, const std::string& prefix) {
@@ -585,10 +609,9 @@ std::string sun_to_char(const std::string& value) {
 }
 
 std::int64_t sun_to_int(double value) {
-    const auto wide = static_cast<long double>(value);
+    const double limit = std::ldexp(1.0, 63);
     if (!std::isfinite(value) || std::floor(value) != value ||
-        wide < static_cast<long double>(std::numeric_limits<std::int64_t>::min()) ||
-        wide > static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+        value < -limit || value >= limit)
         throw SunRuntimeError("int() requires an in-range whole number");
     return static_cast<std::int64_t>(value);
 }
@@ -727,8 +750,74 @@ T sun_list_pop(std::vector<T>& values, double index) {
     values.erase(values.begin() + static_cast<std::ptrdiff_t>(offset));
     return value;
 }
+
+using SunBytes = std::vector<std::uint8_t>;
+
+std::size_t sun_bytes_index(const SunBytes& values, double index) {
+    if (!std::isfinite(index) || index < 0.0 || std::floor(index) != index ||
+        index >= static_cast<double>(values.size())) {
+        throw SunRuntimeError("bytes index out of bounds or not a non-negative integer");
+    }
+    return static_cast<std::size_t>(index);
+}
+
+std::uint8_t sun_bytes_value(double value) {
+    if (!std::isfinite(value) || value < 0.0 || value > 255.0 ||
+        std::floor(value) != value) {
+        throw SunRuntimeError("byte value must be an integer from 0 to 255");
+    }
+    return static_cast<std::uint8_t>(value);
+}
+
+std::int64_t sun_bytes_at(const SunBytes& values, double index) {
+    return static_cast<std::int64_t>(values[sun_bytes_index(values, index)]);
+}
+
+void sun_bytes_set(SunBytes& values, double index, double value) {
+    values[sun_bytes_index(values, index)] = sun_bytes_value(value);
+}
+
+void sun_bytes_append(SunBytes& values, double value) {
+    values.push_back(sun_bytes_value(value));
+}
+
+bool sun_bytes_contains(const SunBytes& values, double value) {
+    const auto byte = sun_bytes_value(value);
+    return std::find(values.begin(), values.end(), byte) != values.end();
+}
+
+SunBytes sun_bytes_from_string(const std::string& value) {
+    SunBytes result;
+    result.reserve(value.size());
+    for (const auto byte : value)
+        result.push_back(static_cast<std::uint8_t>(
+            static_cast<unsigned char>(byte)));
+    return result;
+}
+
+std::string sun_bytes_to_string(const SunBytes& value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const auto byte : value) result.push_back(static_cast<char>(byte));
+    return result;
+}
+
+SunBytes sun_bytes_from_list(const std::vector<std::int64_t>& value) {
+    SunBytes result;
+    result.reserve(value.size());
+    for (const auto byte : value) result.push_back(sun_bytes_value(static_cast<double>(byte)));
+    return result;
+}
+
+std::vector<std::int64_t> sun_bytes_to_list(const SunBytes& value) {
+    std::vector<std::int64_t> result;
+    result.reserve(value.size());
+    for (const auto byte : value) result.push_back(static_cast<std::int64_t>(byte));
+    return result;
+}
 )cpp";
     if (program.io_imported) out << io_runtime_cpp();
+    if (program.json_imported) out << json_runtime_cpp();
     if (program.memory_imported) {
         out << R"cpp(
 class SunMemoryRegion {
@@ -748,6 +837,16 @@ public:
         return static_cast<double>(bytes_->size());
     }
 
+    SunBytes to_bytes() const { return *bytes_; }
+
+    static SunMemoryRegion from_bytes(const SunBytes& bytes) {
+        if (bytes.size() > max_region_size) {
+            throw SunRuntimeError("memory region is too large");
+        }
+        return SunMemoryRegion(
+            std::make_shared<std::vector<std::uint8_t>>(bytes));
+    }
+
     double read_u8(double offset) const {
         return static_cast<double>((*bytes_)[checked_offset(offset)]);
     }
@@ -760,11 +859,96 @@ public:
         (*bytes_)[checked_offset(offset)] = static_cast<std::uint8_t>(value);
     }
 
+    std::int64_t read_u16(double offset, const std::string& endian) const {
+        return static_cast<std::int64_t>(
+            read_unsigned(offset, 2, endian, "memory.read_u16"));
+    }
+
+    std::int64_t read_u32(double offset, const std::string& endian) const {
+        return static_cast<std::int64_t>(
+            read_unsigned(offset, 4, endian, "memory.read_u32"));
+    }
+
+    void write_u16(double offset, double value, const std::string& endian) {
+        write_unsigned(offset, value, 2, 65535.0, endian, "memory.write_u16");
+    }
+
+    void write_u32(double offset, double value, const std::string& endian) {
+        write_unsigned(offset, value, 4, 4294967295.0, endian, "memory.write_u32");
+    }
+
+    void fill(double value) {
+        if (!std::isfinite(value) || value < 0.0 || value > 255.0 ||
+            std::floor(value) != value) {
+            throw SunRuntimeError("memory.fill value must be an integer from 0 to 255");
+        }
+        std::fill(bytes_->begin(), bytes_->end(), static_cast<std::uint8_t>(value));
+    }
+
+    void copy_from(double destination_offset, const SunMemoryRegion& source,
+                   double source_offset, double length) {
+        const auto destination_range = checked_range(destination_offset, length);
+        const auto source_range = source.checked_range(source_offset, length);
+        const auto first = source.bytes_->begin() +
+                           static_cast<std::ptrdiff_t>(source_range.first);
+        const auto last = first + static_cast<std::ptrdiff_t>(source_range.second);
+        const std::vector<std::uint8_t> copied(first, last);
+        std::copy(copied.begin(), copied.end(),
+                  bytes_->begin() +
+                      static_cast<std::ptrdiff_t>(destination_range.first));
+    }
+
 private:
     static constexpr std::size_t max_region_size = 64 * 1024 * 1024;
 
     explicit SunMemoryRegion(std::shared_ptr<std::vector<std::uint8_t>> bytes)
         : bytes_(std::move(bytes)) {}
+
+    static void validate_endian(const std::string& endian,
+                                const std::string& operation) {
+        if (endian != "little" && endian != "big") {
+            throw SunRuntimeError(operation + " endian must be 'little' or 'big'");
+        }
+    }
+
+    std::uint32_t read_unsigned(double offset, std::size_t width,
+                                const std::string& endian,
+                                const std::string& operation) const {
+        validate_endian(endian, operation);
+        const auto range = checked_range(offset, static_cast<double>(width));
+        std::uint32_t result = 0;
+        if (endian == "little") {
+            for (std::size_t index = 0; index < width; ++index) {
+                result |= static_cast<std::uint32_t>((*bytes_)[range.first + index])
+                          << (index * 8);
+            }
+        } else {
+            for (std::size_t index = 0; index < width; ++index) {
+                result = (result << 8) | (*bytes_)[range.first + index];
+            }
+        }
+        return result;
+    }
+
+    void write_unsigned(double offset, double value, std::size_t width,
+                        double maximum, const std::string& endian,
+                        const std::string& operation) {
+        if (!std::isfinite(value) || value < 0.0 || value > maximum ||
+            std::floor(value) != value) {
+            throw SunRuntimeError(operation + " value must be an integer from 0 to " +
+                                  std::to_string(static_cast<std::uint64_t>(maximum)));
+        }
+        validate_endian(endian, operation);
+        const auto range = checked_range(offset, static_cast<double>(width));
+        const auto encoded = static_cast<std::uint32_t>(value);
+        for (std::size_t index = 0; index < width; ++index) {
+            const auto shift = endian == "little"
+                                   ? index * 8
+                                   : (width - index - 1) * 8;
+            (*bytes_)[range.first + index] =
+                static_cast<std::uint8_t>((encoded >> shift) & 0xffU);
+        }
+    }
 
     std::size_t checked_offset(double offset) const {
         if (!std::isfinite(offset) || offset < 0.0 || std::floor(offset) != offset) {
@@ -776,7 +960,81 @@ private:
         return static_cast<std::size_t>(offset);
     }
 
+    std::pair<std::size_t, std::size_t> checked_range(double offset,
+                                                      double length) const {
+        if (!std::isfinite(offset) || offset < 0.0 ||
+            std::floor(offset) != offset) {
+            throw SunRuntimeError("memory range offset must be a non-negative integer");
+        }
+        if (!std::isfinite(length) || length < 0.0 ||
+            std::floor(length) != length) {
+            throw SunRuntimeError("memory range length must be a non-negative integer");
+        }
+        if (offset > static_cast<double>(bytes_->size())) {
+            throw SunRuntimeError("memory range out of bounds");
+        }
+        const auto begin = static_cast<std::size_t>(offset);
+        const auto remaining = bytes_->size() - begin;
+        if (length > static_cast<double>(remaining)) {
+            throw SunRuntimeError("memory range out of bounds");
+        }
+        return {begin, static_cast<std::size_t>(length)};
+    }
+
     std::shared_ptr<std::vector<std::uint8_t>> bytes_;
+};
+
+class SunMemoryPointer {
+    struct Allocation {
+        void* address = nullptr;
+        std::size_t size = 0;
+        ~Allocation() { std::free(address); }
+    };
+
+public:
+    SunMemoryPointer() = default;
+
+    static SunMemoryPointer allocate(double requested_size) {
+        if (!std::isfinite(requested_size) || requested_size < 0.0 ||
+            std::floor(requested_size) != requested_size ||
+            requested_size > static_cast<double>(64 * 1024 * 1024)) {
+            throw SunRuntimeError("memory.alloc_ptr size must be an integer from 0 to 67108864");
+        }
+        const auto size = static_cast<std::size_t>(requested_size);
+        if (size == 0) return {};
+        auto allocation = std::make_shared<Allocation>();
+        allocation->address = std::malloc(size);
+        if (!allocation->address) {
+            throw SunRuntimeError("memory.alloc_ptr could not allocate memory");
+        }
+        allocation->size = size;
+        return SunMemoryPointer(std::move(allocation));
+    }
+
+    void* get() const {
+        return allocation_ ? allocation_->address : nullptr;
+    }
+
+    bool is_null() const { return get() == nullptr; }
+
+    std::int64_t size() const {
+        return allocation_ && allocation_->address
+                   ? static_cast<std::int64_t>(allocation_->size)
+                   : 0;
+    }
+
+    void release() const {
+        if (!allocation_ || !allocation_->address) return;
+        std::free(allocation_->address);
+        allocation_->address = nullptr;
+        allocation_->size = 0;
+    }
+
+private:
+    explicit SunMemoryPointer(std::shared_ptr<Allocation> allocation)
+        : allocation_(std::move(allocation)) {}
+
+    std::shared_ptr<Allocation> allocation_;
 };
 )cpp";
     }
@@ -896,6 +1154,16 @@ private:
     out << "\nstd::string sun_to_string(const std::string& value) {\n"
            "    return value;\n"
            "}\n\n"
+           "std::string sun_to_string(const SunBytes& value) {\n"
+           "    std::ostringstream stream;\n"
+           "    stream << '[';\n"
+           "    for (std::size_t i = 0; i < value.size(); ++i) {\n"
+           "        if (i) stream << \", \";\n"
+           "        stream << static_cast<unsigned int>(value[i]);\n"
+           "    }\n"
+           "    stream << ']';\n"
+           "    return stream.str();\n"
+           "}\n\n"
            "template <typename T>\n"
            "std::string sun_to_string(const T& value) {\n"
            "    std::ostringstream stream;\n"
@@ -948,6 +1216,11 @@ private:
            "    }\n"
            "    return next;\n"
            "}\n\n";
+    if (program.memory_imported) {
+        out << "std::string sun_to_string(const SunMemoryRegion& value) {\n"
+               "    return \"region(size=\" + sun_to_string(value.size()) + \")\";\n"
+               "}\n\n";
+    }
     for (const auto& type : program.custom_types) {
         if (!type.is_enum) continue;
         const bool has_payload = std::any_of(
@@ -974,6 +1247,22 @@ private:
                 << '"' << value << '"' << ";\n";
         }
         out << "    }\n    return \"<invalid " << type.name << ">\";\n}\n\n";
+    }
+    for (const auto& type : program.custom_types) {
+        if (type.is_enum || type.is_error || type.is_error_base) continue;
+        const auto fields = type.is_class ? all_class_fields(program, type) : type.fields;
+        out << "std::string sun_to_string(const SunType_" << type.name
+            << "& value) {\n"
+            << "    std::ostringstream stream;\n"
+            << "    stream << \"" << type.name << "{\";\n";
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            if (i) out << "    stream << \", \";\n";
+            out << "    stream << \"" << fields[i].name << "=\" << "
+                << "sun_to_string(value." << fields[i].name << ");\n";
+        }
+        out << "    stream << \"}\";\n"
+            << "    return stream.str();\n"
+            << "}\n\n";
     }
     for (const auto& function : program.functions) {
         if (!function.owner_type.empty()) continue;

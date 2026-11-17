@@ -2,6 +2,9 @@
 
 Este guia mostra como compilar o compilador, transpilar um arquivo `.su`,
 gerar um executavel e escrever programas com a sintaxe atualmente suportada.
+A referencia normativa das regras atuais esta em
+[SUN-SPEC.md](SUN-SPEC.md); este arquivo continua sendo o guia pratico, com
+exemplos e instrucoes de uso.
 
 ## 1. Requisitos
 
@@ -26,11 +29,17 @@ build/sun --help
 ```
 
 O core esta dividido em `src/main.cpp` (CLI), `src/lexer.cpp` (tokens),
-`src/parser.cpp` (sintaxe e verificacao de tipos), `src/codegen.cpp` (geracao
-de C++) e `src/compiler.hpp` (tipos e interface entre os modulos).
-`print`, suas expressoes e as instrucoes de controle sao mantidos como nos
-estruturados entre parser e gerador. Nas demais instrucoes, a conversao das
-expressoes ainda ocorre durante a analise e pode ser migrada incrementalmente.
+`src/parser.cpp` (sintaxe e verificacao de tipos), `src/compiler.hpp` (AST e
+tipos), `src/expression_codegen.cpp` (expressoes AST para C++) e
+`src/codegen.cpp` (programa AST para C++). Expressoes tipadas sao representadas
+pela AST e essa arvore e a fonte de verdade para sua emissao. A verificacao de
+tipos ainda acontece durante o parsing. Declaracoes, atribuicoes, retornos,
+chamadas, atribuicoes indexadas, chamadas de metodos, condicoes, loops e
+bibliotecas imperativas ja possuem nos estruturados na AST. Apenas blocos
+`inline cpp` sao preservados como texto C++ literal; eles continuam sendo uma
+excecao explicitamente nativa. Essa separacao ja remove a maioria da conversao
+direta de instrucoes para C++ durante o parsing, mas ainda nao divide o pipeline
+em passes completos e independentes de lexing, analise semantica e codegen.
 
 Para verificar sintaxe e tipos sem gravar C++ nem executar o compilador C++:
 
@@ -142,8 +151,9 @@ report(int(3), int(5), label="total", mode="brief")
 
 ## 5. Strings e interpolacao
 
-Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t` e
-`\r`. O operador `+` concatena texto:
+Strings usam aspas duplas. Os escapes aceitos sao `\\`, `\"`, `\n`, `\t`, `\r`
+e `\0`; bytes NUL literais no arquivo fonte nao sao aceitos. O operador `+`
+concatena texto:
 
 ```sun
 def mostrar(nome)
@@ -153,8 +163,9 @@ end
 
 Strings oferecem `upper()`, `lower()` e `trim()`; `split(separador)` retorna
 `list[string]`; `replace(busca, substituicao)` retorna uma nova string;
-`contains(texto)`, `starts_with(prefixo)` e `ends_with(sufixo)` retornam `bool`.
-`split` e `replace` rejeitam o texto de busca vazio com um erro de runtime.
+`contains(texto)`, `starts_with(prefixo)` e `ends_with(sufixo)` retornam `bool`;
+`count(texto)` retorna a quantidade de ocorrencias nao sobrepostas.
+`split`, `replace` e `count` rejeitam o texto de busca vazio com erro de runtime.
 As transformacoes de maiusculas/minusculas e `trim()` operam por byte usando o
 locale C ativo; as demais operacoes preservam os bytes UTF-8 sem normalizacao.
 
@@ -198,9 +209,10 @@ end
 
 As expressoes interpoladas usam as regras normais de tipos e podem conter
 operacoes, chamadas de funcao e acesso a itens. O resultado e convertido para
-texto. Regioes de memoria e valores de classes/structs nao podem ser
-interpolados diretamente. As chaves duplas `{{` e `}}` representam chaves
-literais.
+texto. `bytes` e exibido como uma lista de octetos; regioes mostram seu tamanho;
+structs e classes mostram o tipo e seus campos (incluindo os herdados). Valores
+`ptr` e erros personalizados nao podem ser interpolados diretamente. As chaves
+duplas `{{` e `}}` representam chaves literais.
 
 ### Marcador `%v`
 
@@ -223,7 +235,7 @@ literal quando estiver usando argumentos formatados.
 ## 6. Numeros, operadores, condicoes e matematica
 
 Parametros podem declarar `string`, `number`, `bool`, `int`, `char` e tipos de
-lista como `list[number]` ou `list[int]`; `region` continua dependendo de
+lista como `list[number]` ou `list[int]`; `region` e `ptr` dependem de
 `import memory`. Parametros sem tipo continuam sendo `string` para manter
 compatibilidade com programas anteriores. Variaveis locais usam `let` e exigem
 tipo explicito:
@@ -278,7 +290,9 @@ duas strings. `int` e um inteiro assinado de 64 bits: sua divisao trunca em
 direcao a zero e overflow ou divisao por zero geram erro em runtime.
 `int(numero)` converte apenas valores inteiros dentro do intervalo de `int`;
 `number(inteiro)` converte explicitamente para `number`, e `int` pode ser
-promovido a `number` em expressoes. `char` representa um unico code point
+promovido a `number` em expressoes. `number` usa `double` do C++ e tem precisao
+finita; valores inteiros grandes podem perder exatidao quando convertidos.
+`char` representa um unico code point
 Unicode; `char("A")` e `char("é")` sao conversoes validas, enquanto strings
 vazias ou com mais de um caractere sao rejeitadas.
 
@@ -348,7 +362,7 @@ indices de `insert` e `pop` podem ser `int` ou `number`; valores fracionarios
 ou fora do intervalo geram erro de runtime. `clear()` esvazia a lista.
 `len` aceita listas e strings. Listas podem ser passadas e retornadas de
 funcoes e impressas. Listas vazias precisam de uma anotacao de tipo; listas
-aninhadas, listas de `region` e listas de tuplas nao sao suportadas.
+aninhadas, listas de `region`/`ptr` e listas de tuplas nao sao suportadas.
 
 ### Funcoes integradas para colecoes e numeros
 
@@ -446,9 +460,9 @@ evitando loop infinito por precisao de ponto flutuante. Os valores de `range`
 sao `number` (`double`), nao inteiros.
 
 Funcoes podem declarar retorno com `: tipo` no cabecalho, usando tipos escalares
-ou listas suportados (e `region` com `import memory`). Sem anotacao, a funcao
-retorna `void`. Todo caminho de uma funcao com retorno tipado deve retornar um
-valor do tipo declarado:
+ou listas suportados (e `region` ou `ptr` com `import memory`). Sem anotacao, a
+funcao retorna `void`. Todo caminho de uma funcao com retorno tipado deve
+retornar um valor do tipo declarado:
 
 ```sun
 def dobro(valor: number): number
@@ -503,7 +517,7 @@ nivel superior, os valores padrao nao podem chamar funcoes.
 
 `istype(valor, tipo)` compara o tipo estatico de um valor com os tipos
 escalares `string`, `number`, `bool`, `int` e `char`, ou com as categorias
-`list`, `dict` e `tuple`. `region` tambem pode ser consultado quando
+`list`, `dict` e `tuple`. `region` e `ptr` tambem podem ser consultados quando
 `import memory` esta ativo. As categorias reconhecem colecoes independentemente
 dos tipos dos elementos ou das chaves:
 
@@ -538,11 +552,16 @@ Essas instrucoes geram erro se forem usadas fora de um loop.
 
 `import math` deve aparecer antes das declaracoes e instrucoes. Ele habilita as
 funcoes `math.abs`, `math.acos`, `math.asin`, `math.atan`, `math.atan2`,
-`math.ceil`, `math.cos`, `math.exp`, `math.floor`, `math.fmod`, `math.hypot`,
-`math.log`, `math.log10`, `math.log2`, `math.pow`, `math.sin`, `math.sqrt`,
-`math.tan` e `math.trunc`. Todas recebem um ou dois argumentos numericos; todas,
-exceto `math.atan2`, `math.fmod`, `math.hypot` e `math.pow`, recebem um. A
-biblioteca e implementada usando `<cmath>` do C++.
+`math.ceil`, `math.cos`, `math.exp`, `math.factorial`, `math.floor`,
+`math.fmod`, `math.hypot`, `math.log`, `math.log10`, `math.log2`, `math.pow`,
+`math.sin`, `math.sqrt`, `math.tan` e `math.trunc`. As funcoes matematicas
+recebem um ou dois argumentos numericos; todas, exceto `math.atan2`,
+`math.fmod`, `math.hypot` e `math.pow`, recebem um.
+`math.factorial(x)` (tambem disponivel como `math.fatorial(x)`) usa a
+extensao gamma do fatorial, portanto aceita valores fracionarios e argumentos
+maiores que 20, retornando `number`. Argumentos nao finitos, inteiros negativos
+(polo da funcao gamma) e resultados fora da faixa de `number` geram erro em
+runtime. As demais funcoes sao implementadas usando `<cmath>` do C++.
 
 ### Modulos locais
 
@@ -581,10 +600,10 @@ import local/geometry as geometry
 print(geometry.distance(3, 4))
 ```
 
-O alias entre parenteses e opcional. Modulos locais podem importar outros
-modulos locais; ciclos sao reportados como erro. Por enquanto, eles exportam
-funcoes e blocos `inline cpp` globais. Instrucoes executaveis no nivel superior
-de um modulo nao sao aceitas.
+E possivel envolver o alias entre parenteses, mas isso e opcional. Modulos locais
+podem importar outros modulos locais; ciclos sao reportados como erro. Por
+enquanto, eles exportam funcoes e blocos `inline cpp` globais. Instrucoes
+executaveis no nivel superior de um modulo nao sao aceitas.
 
 ## Biblioteca `sys`
 
@@ -740,7 +759,7 @@ build/sun examples/classes.su --compile
 ## 7. Biblioteca `io`
 
 `import io` habilita leitura e escrita de arquivos de texto. O caminho e uma
-string e pode ser relativo ao diretorio de trabalho do executavel:
+string e pode ser relativo ao diretorio de trabalho do processo:
 
 ```sun
 import io
@@ -763,14 +782,89 @@ caminho existe. `io.read_lines(path)` devolve as linhas como `list[string]`;
 algo foi criado; `io.remove(path)` remove um arquivo ou diretorio vazio e
 retorna se removeu algo; `io.file_size(path)` retorna o tamanho em bytes como
 `int`.
+Para dados binarios, `io.read_bytes(path)` retorna um valor `bytes` e
+`io.write_bytes(path, dados)` grava os octetos sem conversao de texto.
+`io.read_bytes` e `io.write_bytes` usam o caminho e nao alteram a semantica dos
+handles `rb`, cuja leitura continua retornando `string`.
+`io.createdir(path, exist="ok")` tambem cria diretorios e seus pais, retornando
+`true` se criou o destino e `false` se ele ja era um diretorio. Com
+`exist="no"`, a chamada gera erro se o destino ja existir; um caminho existente
+que nao seja diretorio sempre gera erro. O argumento `exist` aceita somente
+`"ok"` ou `"no"` e pode ser omitido para usar `"ok"`.
+`open(path, mode)` (ou `io.open`) retorna um handle que pode ser usado com
+`read(handle)`, `io.read(handle)`, `write(handle, contents)`/`io.write` e
+`close(handle)`/`io.close`. Os modos suportados sao `r` (leitura), `w`
+(escrita truncada), `a` (acrescenta ao final e cria o arquivo se necessario),
+`rb` (leitura binaria, devolvida como `string`) e `pw` (atualizacao de uma
+linha existente). `io.write` aceita handles abertos em `w` ou `a`:
+
+```sun
+import io
+
+with open("notes.txt", "w") as file:
+    io.write(file, "Primeira linha\nSegunda linha\n")
+end
+
+with open("notes.txt", "a") as file:
+    io.write(file, "Linha acrescentada\n")
+end
+
+let file: int = open("notes.txt", "pw")
+io.pw(file, int(2), "Linha atualizada")
+io.close(file)
+
+with open("notes.txt", "r") as file:
+    print(io.read(file))
+end
+```
+
+`with open(path, mode) as nome:` fecha o handle ao sair do bloco, inclusive
+quando o corpo retorna ou gera um erro. `io.pw(handle, linha, conteudo)` troca
+uma linha completa, usando numeracao iniciada em 1. O conteudo precisa ser uma
+unica linha; linhas inexistentes geram erro.
 Erros ao abrir, ler ou gravar arquivos geram erros de runtime Sun e podem ser
 capturados com `try`/`catch`. A implementacao C++ isolada da biblioteca fica em
 `src/stdlib_io.cpp`, e o runtime necessario e incluido no C++ gerado.
 
-## 8. Biblioteca `memory`
+## 8. Biblioteca `json`
 
-`import memory` habilita regioes de bytes gerenciadas, sem expor enderecos
-arbitrarios nem ponteiros nativos. Cada alocacao e limitada a 64 MiB; offsets
+`import json` habilita `json.loads(texto)` e `json.dumps(valor)`, implementados
+no runtime C++ sem dependencias externas. O tipo dinamico `json` preserva
+objetos e arrays aninhados e permite leitura e atualizacao por indice:
+
+```sun
+import json
+
+let data: json = json.loads("{\"user\":{\"name\":\"Ada\"},\"scores\":[10,9]}")
+print(data["user"]["name"].as_string())
+print(data["scores"][0].as_int())
+data["user"]["name"] = "Grace"
+print(json.dumps(data))
+```
+
+O acesso a objetos usa chaves `string`; arrays usam indices `int` ou `number`.
+`.contains(chave)` verifica se um objeto tem uma chave sem lancar erro quando
+ela falta. `.append(valor)` acrescenta um valor JSON-compativel ao final de um
+array e retorna o novo tamanho; o valor pode ser um escalar, JSON, lista tipada
+ou dicionario com chaves `string`. Ambos falham em runtime se usados no tipo de
+container errado. Esses metodos exigem um valor JSON mutavel.
+Conversoes de tipo verificadas incluem `.as_string()`, `.as_number()`,
+`.as_int()` e `.as_bool()`; `.is_null()` testa `null`, e `.size()` retorna o
+tamanho de objetos, arrays ou strings. `json.dumps` tambem serializa valores
+escalares, listas tipadas e dicionarios com chaves `string`.
+JSON malformado, indices fora dos limites ou conversoes incompatíveis geram
+erros de runtime Sun. A implementacao fica em `src/stdlib_json.cpp`.
+Inteiros JSON fora do intervalo de `int` permanecem preservados na
+serializacao; `.as_int()` os rejeita, enquanto `.as_number()` os converte para
+`number` com a precisao limitada de `double`. `json.dumps` nao aceita `NaN` ou
+infinito.
+
+## 9. Biblioteca `memory`
+
+`import memory` habilita regioes de bytes gerenciadas e ponteiros opacos `ptr`.
+As regioes continuam com acesso por bytes e limites verificados; `ptr` e um
+equivalente generico a `void*` para alocacao e interoperabilidade com C++.
+Cada alocacao e limitada a 64 MiB; offsets
 precisam ser numeros inteiros dentro dos limites da regiao e os valores escritos
 precisam estar entre 0 e 255:
 
@@ -785,18 +879,75 @@ print(memory.size(buffer))
 ```
 
 As operacoes disponiveis sao `memory.alloc(tamanho)`, `memory.size(regiao)`,
-`memory.read_u8(regiao, offset)` e a instrucao
-`memory.write_u8(regiao, offset, valor)`. `alloc` aceita tamanhos inteiros de
-0 a 67108864; regioes com tamanho zero nao tem offsets legiveis ou gravaveis.
-Leitura e escrita fora dos limites, offsets fracionarios/negativos e valores
-byte invalidos geram erro em tempo de execucao.
+`memory.read_u8(regiao, offset)`, `memory.read_u16(regiao, offset, endian)` e
+`memory.read_u32(regiao, offset, endian)`, alem das instrucoes
+`memory.write_u8(regiao, offset, valor)`,
+`memory.write_u16(regiao, offset, valor, endian)`,
+`memory.write_u32(regiao, offset, valor, endian)`,
+`memory.fill(regiao, valor)` e
+`memory.copy(destino, offset_destino, origem, offset_origem, comprimento)`.
+`u16` e `u32` retornam `int`; as escritas aceitam valores de 0 a 65535 e de 0 a
+4294967295, respectivamente. O argumento obrigatorio `endian` aceita `"little"`
+ou `"big"`. `fill` preenche toda a regiao com o byte indicado. `copy` copia um
+intervalo entre regioes e tambem funciona quando origem e destino se sobrepoem.
+`alloc` aceita tamanhos inteiros de 0 a 67108864; regioes com tamanho zero nao
+tem offsets legiveis ou gravaveis. Leitura e escrita fora dos limites, offsets
+ou comprimentos fracionarios/negativos e valores invalidos geram erro em tempo
+de execucao. Para uma copia de comprimento zero, os offsets podem apontar para
+o final da regiao. `u64` ainda nao esta disponivel, pois a linguagem nao tem um
+tipo inteiro sem sinal que represente toda a faixa de 64 bits sem perda.
+
+`memory.alloc_ptr(tamanho)` aloca memoria sem associar um tipo de elemento e
+retorna `ptr`. `memory.ptr_size(ptr)` informa o tamanho em bytes e
+`memory.ptr_is_null(ptr)` verifica se o ponteiro e nulo. Use
+`memory.free_ptr(ptr)` para liberar explicitamente a alocacao; liberar um
+ponteiro nulo ou ja liberado nao faz nada. Copias de um `ptr` compartilham a
+mesma alocacao, portanto libera-la invalida todas as copias. Se nenhuma copia
+restar, a memoria tambem e liberada automaticamente.
+
+Sun nao permite dereferenciar `ptr` nem converter enderecos arbitrarios. Para
+interoperar com C ou C++, passe o ponteiro a um bloco `inline cpp` e use
+`nome.get()` para obter um `void*` emprestado, valido enquanto a alocacao nao
+for liberada. Nao libere esse endereco diretamente em C++; use
+`memory.free_ptr`. A partir do acesso a `.get()`, o codigo C++ tem os
+privilegios e riscos normais de acesso a ponteiros nativos.
 
 Uma regiao atribuida a outra variavel ou passada para uma funcao referencia a
 mesma alocacao. A memoria e liberada automaticamente quando nao houver mais
-regioes referenciando-a. O tipo `region` nao pode ser impresso, formatado ou
-comparado diretamente.
+regioes referenciando-a. O tipo `region` nao pode ser comparado diretamente.
+Sua representacao em texto e `region(size=N)`; ela mostra o tamanho atual,
+inclusive `region(size=0)` para regioes vazias.
 
-## 9. C++ inline
+## 10. Tipo `bytes`
+
+`bytes` e uma sequencia mutavel de octetos, indexada a partir de zero. Cada
+valor deve estar entre 0 e 255; indices, atribuicoes e inclusoes sao verificados
+em runtime:
+
+```sun
+import io
+
+let data: bytes = bytes.from_list([int(65), int(66)])
+data[1] = int(67)
+data.append(10)
+print(len(data))
+print(data.contains(67))
+io.write_bytes("message.bin", data)
+
+let loaded: bytes = io.read_bytes("message.bin")
+for value in loaded:
+    print(value)
+end
+```
+
+`bytes.from_string`/`bytes.to_string` copiam os octetos da string sem validar
+UTF-8; `bytes.from_list`/`bytes.to_list` convertem entre `bytes` e `list[int]`.
+`bytes.from_region`/`bytes.to_region` copiam dados e requerem `import memory`.
+`append`, `clear`, indexacao, `len`, `contains` e iteracao estao disponiveis.
+Impressao direta mostra a sequencia como uma lista de octetos, por exemplo
+`[65, 66]`; use `bytes.to_string()` para recuperar o texto original.
+
+## 11. C++ inline
 
 Blocos C++ literais podem ser usados para interoperabilidade e funcionalidades
 que ainda nao existem na linguagem. O terminador e `endcpp`:
@@ -832,7 +983,7 @@ Ele pode acessar ou afetar qualquer estado disponivel ao programa, inclusive
 arquivos e outros recursos do sistema operacional, sujeito aos privilegios do
 processo.
 
-## 10. Comentarios e regras atuais
+## 12. Comentarios e regras atuais
 
 Linhas vazias e comentarios iniciados por `#` sao ignorados. O comentario pode
 aparecer depois de uma instrucao e nao altera `#` dentro de uma string:
@@ -846,16 +997,17 @@ Dentro de `inline cpp`, as linhas sao copiadas literalmente; use os comentarios
 normais de C++ (`//` ou `/* ... */`) nesse bloco.
 
 Atualmente, Sun suporta declaracoes de funcao no nivel superior, parametros
-tipados, variaveis locais tipadas e mutaveis, chamadas, `print`, strings,
-numeros, `int`, `char`, listas homogeneas, entrada tipada com `input`, operadores
-aritmeticos, de comparacao e logicos, f-strings, `%v`, `if`/`elif`/`else`,
-loops `while`, `for` por `range` e `for` por lista, retornos tipados,
-`try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io` e
-`memory`, `istype`, parametros com valores padrao, imports de modulos locais,
-structs, enums com payload, `match`, classes com heranca simples, funcoes
-aninhadas, dicionarios e C++ inline. Classes de erro podem herdar de `AnError`.
+tipados, variaveis locais tipadas, constantes, chamadas, `print`, strings,
+numeros, `int`, `char`, listas homogeneas, dicionarios e tuplas, entrada tipada
+com `input`, operadores aritmeticos, de comparacao e logicos, f-strings, `%v`,
+`if`/`elif`/`else`, loops `while`, `for` por `range` e `for` por lista, retornos
+tipados, `try`/`catch` para erros de runtime Sun, as bibliotecas `math`, `io`,
+`json`, `memory` e `sys`, `with open`, `istype`, parametros com valores padrao,
+imports de modulos locais, structs, enums com payload, `match`, classes com
+heranca simples, funcoes aninhadas e C++ inline. Classes de erro podem herdar de
+`AnError`.
 
-## 11. Erros e acessibilidade
+## 12. Erros e acessibilidade
 
 Erros de sintaxe e tipos aparecem imediatamente com arquivo, linha, coluna e
 trecho destacado. Quando possivel, Sun tambem sugere como corrigir o problema:
@@ -976,10 +1128,14 @@ Problemas comuns:
 - **Erro ao compilar C++**: confirme se `g++`/`clang++` esta instalado ou informe
   o compilador com `--compiler`.
 
-## 12. Executar os testes
+## 13. Executar os testes
 
 Com Python 3 instalado:
 
 ```sh
 make test
 ```
+
+`make test` distribui os casos entre ate quatro processos, cada um com uma
+pasta temporaria isolada. Ajuste o paralelismo quando necessario, por exemplo
+`make test TEST_JOBS=2`; use `make test-serial` para executar a suite sequencial.

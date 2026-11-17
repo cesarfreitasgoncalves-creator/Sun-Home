@@ -17,6 +17,7 @@ Keyword keyword_from_word(const std::string& word) {
     if (word == "match") return Keyword::match_;
     if (word == "case") return Keyword::case_;
     if (word == "try") return Keyword::try_;
+    if (word == "with") return Keyword::with_;
     if (word == "catch") return Keyword::catch_;
     if (word == "except") return Keyword::except_;
     if (word == "finally") return Keyword::finally_;
@@ -90,6 +91,7 @@ std::vector<Token> tokenize(const std::string& source, std::size_t line) {
                     }
                     current = source[i++];
                     switch (current) {
+                    case '0': value.push_back('\0'); break;
                     case 'n': value.push_back('\n'); break;
                     case 't': value.push_back('\t'); break;
                     case 'r': value.push_back('\r'); break;

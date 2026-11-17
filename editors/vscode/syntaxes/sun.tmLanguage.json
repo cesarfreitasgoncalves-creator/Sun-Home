@@ -109,23 +109,27 @@
     },
     {
       "name": "storage.type.sun",
-      "match": "\\b(?:string|str|number|int|bool|char|region|list|dict|tuple)\\b"
+      "match": "\\b(?:string|str|number|int|bool|char|region|ptr|bytes|json|list|dict|tuple)\\b"
     },
     {
       "name": "support.module.sun",
-      "match": "\\b(?:math|io|sys|memory)\\b(?=\\.)"
+      "match": "\\b(?:math|io|sys|memory|json|bytes)\\b(?=\\.)"
     },
     {
       "name": "support.function.builtin.sun",
-      "match": "\\b(?:print|input|len|sum|all|any|min|max|round|abs|floor|ceil|trunc|istype|assert|range)\\b(?=\\s*\\()"
+      "match": "\\b(?:print|printc|input|len|sum|all|any|min|max|round|abs|floor|ceil|trunc|int|number|char|istype|assert|range|open|read|write|close|pw)\\b(?=\\s*\\()"
     },
     {
       "name": "support.function.math.sun",
-      "match": "(?<=math\\.)(?:abs|acos|asin|atan|atan2|ceil|cos|exp|floor|fmod|hypot|log|log10|log2|pow|sin|sqrt|tan|trunc)\\b"
+      "match": "(?<=math\\.)(?:abs|acos|asin|atan|atan2|ceil|cos|exp|factorial|fatorial|floor|fmod|hypot|log|log10|log2|pow|sin|sqrt|tan|trunc)\\b"
     },
     {
-      "name": "support.function.string.sun",
-      "match": "(?<=\\.)(?:upper|lower|trim|split|replace|contains|starts_with|ends_with)\\b(?=\\s*\\()"
+      "name": "support.function.module.sun",
+      "match": "(?<=io\\.)(?:open|read|write|close|pw|write_text|append_text|write_bytes|read_text|read_bytes|exists|read_lines|is_directory|remove|create_directories|createdir|file_size)\\b|(?<=memory\\.)(?:alloc|alloc_ptr|size|read_u8|read_u16|read_u32|write_u8|write_u16|write_u32|fill|copy|free_ptr|ptr_size|ptr_is_null)\\b|(?<=json\\.)(?:loads|dumps)\\b|(?<=bytes\\.)(?:from_string|to_string|from_list|to_list|from_region|to_region)\\b|(?<=sys\\.)(?:args|platform|cwd|env|env_exists|exit)\\b"
+    },
+    {
+      "name": "support.function.method.sun",
+      "match": "(?<=\\.)(?:upper|lower|trim|split|replace|contains|starts_with|ends_with|append|insert|remove|pop|clear|keys|values|get|as_string|as_number|as_int|as_bool|is_null|size)\\b(?=\\s*\\()"
     },
     {
       "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
@@ -151,7 +155,7 @@
     },
     {
       "name": "keyword.control.sun",
-      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|catch|except|finally|export|let|const|raise|return|break|continue|import|end|and|or|not)\\b"
+      "match": "\\b(?:def|class|struct|enum|if|elif|else|while|for|in|match|case|try|with|catch|except|finally|export|let|const|raise|return|break|continue|import|end|and|or|not)\\b"
     },
     {
       "name": "keyword.other.sun",

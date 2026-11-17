@@ -26,6 +26,7 @@ enum class Keyword {
     match_,
     case_,
     try_,
+    with_,
     catch_,
     except_,
     finally_,
@@ -53,8 +54,11 @@ struct Type {
         number,
         boolean,
         region,
+        pointer,
+        bytes,
         integer,
         character,
+        json,
         list_number,
         list_integer,
         list_string,
@@ -84,6 +88,8 @@ struct Type {
     static const Type number;
     static const Type boolean;
     static const Type region;
+    static const Type pointer;
+    static const Type bytes;
     static const Type integer;
     static const Type character;
     static const Type list_number;
@@ -99,6 +105,8 @@ inline const Type Type::string{Type::Kind::string};
 inline const Type Type::number{Type::Kind::number};
 inline const Type Type::boolean{Type::Kind::boolean};
 inline const Type Type::region{Type::Kind::region};
+inline const Type Type::pointer{Type::Kind::pointer};
+inline const Type Type::bytes{Type::Kind::bytes};
 inline const Type Type::integer{Type::Kind::integer};
 inline const Type Type::character{Type::Kind::character};
 inline const Type Type::list_number{Type::Kind::list_number};
@@ -136,6 +144,8 @@ struct Expression {
     enum class Kind {
         literal,
         string_literal,
+        formatted_string,
+        string_interpolation,
         variable,
         unary,
         binary,
@@ -160,6 +170,56 @@ struct PrintStatement {
     Expression value;
 };
 
+struct VariableDeclarationStatement {
+    Type type;
+    std::string cpp_name;
+    bool is_const = false;
+    Expression initializer;
+};
+
+struct AssignmentStatement {
+    std::string cpp_name;
+    Expression value;
+};
+
+struct ReturnStatement {
+    std::optional<Expression> value;
+};
+
+struct CallStatement {
+    std::string callee;
+    std::vector<Expression> arguments;
+};
+
+struct MemberCallStatement {
+    Expression receiver;
+    std::string method;
+    std::vector<Expression> arguments;
+};
+
+struct IndexedAssignmentStatement {
+    enum class Kind {
+        list,
+        dictionary,
+        json,
+        bytes
+    };
+    Kind kind;
+    Expression object;
+    Expression key;
+    Expression value;
+};
+
+struct MemberAssignmentStatement {
+    Expression target;
+    Expression value;
+};
+
+struct LoopControlStatement {
+    enum class Kind { break_, continue_ };
+    Kind kind;
+};
+
 struct PrintColorStatement {
     Expression value;
     std::string color_prefix;
@@ -180,7 +240,7 @@ struct DictionaryAssignmentStatement {
 };
 
 struct IfBranch {
-    std::string condition;
+    Expression condition;
     Block body;
 };
 
@@ -216,24 +276,24 @@ struct LocalFunctionStatement {
 };
 
 struct WhileStatement {
-    std::string condition;
+    Expression condition;
     Block body;
 };
 
 struct RangeForStatement {
     std::string start_name;
-    std::string start_value;
+    Expression start_value;
     std::string stop_name;
-    std::string stop_value;
+    Expression stop_value;
     std::string step_name;
-    std::string step_value;
+    Expression step_value;
     std::string variable_name;
     Block body;
 };
 
 struct ForEachStatement {
     std::string variable_name;
-    std::string collection;
+    Expression collection;
     bool dictionary = false;
     std::string entry_name;
     Block body;
@@ -252,12 +312,25 @@ struct TryCatchStatement {
     std::optional<Block> finally_body;
 };
 
+struct WithOpenStatement {
+    std::string guard_name;
+    std::string handle_name;
+    Expression path;
+    Expression mode;
+    Block body;
+};
+
 struct Statement {
-    using Node = std::variant<RawStatement, PrintStatement, PrintColorStatement,
+    using Node = std::variant<RawStatement, VariableDeclarationStatement,
+                              AssignmentStatement, ReturnStatement,
+                              CallStatement, MemberCallStatement,
+                              IndexedAssignmentStatement, MemberAssignmentStatement,
+                              LoopControlStatement,
+                              PrintStatement, PrintColorStatement,
                               DictionaryAssignmentStatement, AssertStatement, RaiseStatement,
                               IfStatement, MatchStatement, LocalFunctionStatement,
                               WhileStatement, RangeForStatement,
-                              ForEachStatement, TryCatchStatement>;
+                              ForEachStatement, TryCatchStatement, WithOpenStatement>;
 
     Node node;
     std::size_t line;
@@ -306,6 +379,7 @@ struct Program {
     bool math_imported = false;
     bool memory_imported = false;
     bool io_imported = false;
+    bool json_imported = false;
     bool sys_imported = false;
 };
 
